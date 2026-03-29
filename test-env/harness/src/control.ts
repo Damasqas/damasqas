@@ -2,118 +2,286 @@ import express from "express";
 import Redis from "ioredis";
 import { Queue } from "bullmq";
 import { QUEUE_CONFIGS } from "./queues";
+import {
+  startProducer, stopProducer, setProducerRate, startAllProducers,
+  stopAllProducers, getProducerStates, addSingleJob, getQueue,
+} from "./producer";
 
 const redis = new Redis(process.env.REDIS_URL!);
 const app = express();
 app.use(express.json());
 
-// ─── Status ─────────────────────────────────────────────
+// ─── Dashboard UI ───────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send(`
-    <html>
-    <head><title>Chaos Control</title>
-    <style>
-      body { font-family: monospace; background: #111; color: #aaa; padding: 40px; }
-      h1 { color: #fff; }
-      h2 { color: #fca5a5; margin-top: 30px; }
-      button { background: #222; color: #fca5a5; border: 1px solid #333; padding: 8px 16px;
-               margin: 4px; cursor: pointer; font-family: monospace; font-size: 13px; border-radius: 6px; }
-      button:hover { background: #333; }
-      .green { color: #4ade80; }
-      .red { color: #ef4444; }
-      pre { background: #1a1a1a; padding: 12px; border-radius: 6px; margin: 8px 0; }
-      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    </style>
-    </head>
-    <body>
-    <h1>Damasqas Chaos Control</h1>
-    <p>Click buttons to inject failures. Watch <a href="http://localhost:3888" style="color:#60a5fa">localhost:3888</a> react.</p>
+  const queueNames = Object.keys(QUEUE_CONFIGS);
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Damasqas Test Harness</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #d4d4d4; }
 
-    <div class="grid">
-      <div>
-        <h2>Failure Injection</h2>
-        <p>Set failure rate for a queue (0.0 = no failures, 1.0 = 100% failure)</p>
-        <button onclick="chaos('email-send', 0.9)">email-send &rarr; 90% failures</button>
-        <button onclick="chaos('email-send', 0.5)">email-send &rarr; 50% failures</button>
-        <button onclick="chaos('webhook-deliver', 0.8)">webhook-deliver &rarr; 80% failures</button>
-        <button onclick="chaos('data-enrich', 1.0)">data-enrich &rarr; 100% failures</button>
-        <button onclick="chaos('payment-process', 0.7)">payment-process &rarr; 70% failures</button>
+    .header { padding: 24px 32px; border-bottom: 1px solid #1e1e1e; display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 18px; color: #fff; font-weight: 600; }
+    .header-actions { display: flex; gap: 8px; }
 
-        <h2>Slowdown</h2>
-        <p>Multiply processing time (1 = normal, 10 = 10x slower)</p>
-        <button onclick="slow('pdf-generate', 10)">pdf-generate &rarr; 10x slower</button>
-        <button onclick="slow('data-enrich', 5)">data-enrich &rarr; 5x slower</button>
-        <button onclick="slow('email-send', 3)">email-send &rarr; 3x slower</button>
+    .global-bar { padding: 16px 32px; background: #111; border-bottom: 1px solid #1e1e1e; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .global-bar .label { color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; }
 
-        <h2>Bulk Produce</h2>
-        <p>Flood a queue with jobs to test backlog detection</p>
-        <button onclick="flood('email-send', 5000)">email-send &larr; 5000 jobs</button>
-        <button onclick="flood('webhook-deliver', 2000)">webhook-deliver &larr; 2000 jobs</button>
-        <button onclick="flood('image-resize', 10000)">image-resize &larr; 10000 jobs</button>
-        <button onclick="flood('report-monthly', 50)">report-monthly &larr; 50 jobs (idle queue)</button>
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 1px; background: #1e1e1e; }
+
+    .card { background: #111; padding: 20px; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .card-name { font-size: 15px; font-weight: 600; color: #fff; }
+    .card-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+    .badge-idle { background: #1e1e1e; color: #666; }
+    .badge-running { background: #052e16; color: #4ade80; }
+    .badge-chaos { background: #350a0a; color: #ef4444; }
+
+    .controls { display: flex; flex-direction: column; gap: 12px; }
+    .control-row { display: flex; align-items: center; gap: 12px; }
+    .control-label { font-size: 12px; color: #888; width: 80px; flex-shrink: 0; }
+    .control-value { font-size: 12px; color: #fff; width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+
+    input[type="range"] { flex: 1; height: 4px; -webkit-appearance: none; appearance: none; background: #2a2a2a; border-radius: 2px; outline: none; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; cursor: pointer; }
+    input[type="range"].danger::-webkit-slider-thumb { background: #ef4444; }
+    input[type="range"].warn::-webkit-slider-thumb { background: #f59e0b; }
+
+    .btn { padding: 6px 12px; border: 1px solid #333; background: #1a1a1a; color: #d4d4d4; border-radius: 6px;
+           font-size: 12px; cursor: pointer; font-family: inherit; transition: all 0.15s; white-space: nowrap; }
+    .btn:hover { background: #252525; border-color: #444; }
+    .btn-sm { padding: 4px 8px; font-size: 11px; }
+    .btn-start { border-color: #166534; color: #4ade80; }
+    .btn-start:hover { background: #052e16; }
+    .btn-stop { border-color: #7f1d1d; color: #ef4444; }
+    .btn-stop:hover { background: #350a0a; }
+    .btn-action { border-color: #1e40af; color: #60a5fa; }
+    .btn-action:hover { background: #0c1a3d; }
+    .btn-danger { border-color: #7f1d1d; color: #ef4444; }
+    .btn-danger:hover { background: #350a0a; }
+    .btn-global { border-color: #166534; color: #4ade80; }
+    .btn-global:hover { background: #052e16; }
+    .btn-reset { border-color: #854d0e; color: #fbbf24; }
+    .btn-reset:hover { background: #1c1004; }
+    .btn-preset { border-color: #6b21a8; color: #c084fc; }
+    .btn-preset:hover { background: #1a0533; }
+
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+
+    .counts { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: #1e1e1e; border-radius: 6px; overflow: hidden; margin-top: 12px; }
+    .count-cell { background: #151515; padding: 8px; text-align: center; }
+    .count-cell .num { font-size: 16px; font-weight: 600; color: #fff; font-variant-numeric: tabular-nums; }
+    .count-cell .lbl { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+
+    .presets { padding: 16px 32px; border-top: 1px solid #1e1e1e; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .presets .label { color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; }
+
+    .toast { position: fixed; bottom: 24px; right: 24px; background: #1a1a1a; border: 1px solid #333; color: #fff;
+             padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
+    .toast.show { opacity: 1; }
+
+    .separator { width: 1px; height: 20px; background: #2a2a2a; margin: 0 4px; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Damasqas Test Harness</h1>
+  <div class="header-actions">
+    <a href="http://localhost:3888" target="_blank" class="btn btn-action">Open Dashboard</a>
+  </div>
+</div>
+
+<div class="global-bar">
+  <span class="label">Global</span>
+  <button class="btn btn-global" onclick="api('/producers/start-all', 'POST')">Start All Producers</button>
+  <button class="btn btn-stop" onclick="api('/producers/stop-all', 'POST')">Stop All Producers</button>
+  <div class="separator"></div>
+  <button class="btn btn-reset" onclick="api('/reset-all', 'POST')">Reset All Chaos</button>
+  <button class="btn btn-danger" onclick="if(confirm('Drain all failed/waiting jobs from all queues?')) api('/drain-all', 'POST')">Drain All Queues</button>
+</div>
+
+<div class="grid" id="queues">
+  ${queueNames.map(q => `
+  <div class="card" id="card-${q}" data-queue="${q}">
+    <div class="card-header">
+      <span class="card-name">${q}</span>
+      <span class="card-badge badge-idle" id="badge-${q}">IDLE</span>
+    </div>
+    <div class="controls">
+      <div class="control-row">
+        <span class="control-label">Producer</span>
+        <button class="btn btn-sm btn-start" id="start-${q}" onclick="api('/producers/${q}/start', 'POST')">Start</button>
+        <button class="btn btn-sm btn-stop" id="stop-${q}" onclick="api('/producers/${q}/stop', 'POST')">Stop</button>
+        <button class="btn btn-sm btn-action" onclick="api('/producers/${q}/add', 'POST', {count: 1})">+1 Job</button>
+        <button class="btn btn-sm btn-action" onclick="api('/producers/${q}/add', 'POST', {count: 10})">+10</button>
+        <button class="btn btn-sm btn-action" onclick="api('/producers/${q}/add', 'POST', {count: 100})">+100</button>
       </div>
-      <div>
-        <h2>Recovery</h2>
-        <button onclick="reset('email-send')">Reset email-send</button>
-        <button onclick="reset('webhook-deliver')">Reset webhook-deliver</button>
-        <button onclick="reset('data-enrich')">Reset data-enrich</button>
-        <button onclick="reset('pdf-generate')">Reset pdf-generate</button>
-        <button onclick="reset('payment-process')">Reset payment-process</button>
-        <button onclick="resetAll()">Reset ALL to normal</button>
-
-        <h2>Presets</h2>
-        <p>Run a full scenario with one click</p>
-        <button onclick="preset('spike')">Failure Spike (email-send 90% for 2 min)</button>
-        <button onclick="preset('cascade')">Cascading Failure (spike &rarr; backlog &rarr; slow)</button>
-        <button onclick="preset('flood')">Backlog Flood (5k jobs on email-send)</button>
-        <button onclick="preset('slowdown')">System Slowdown (all queues 5x slower)</button>
-        <button onclick="preset('mixed')">Mixed Errors (all error types on email-send)</button>
-
-        <h2>Status</h2>
-        <pre id="status">Loading...</pre>
-        <button onclick="loadStatus()">Refresh Status</button>
+      <div class="control-row">
+        <span class="control-label">Rate</span>
+        <input type="range" id="rate-${q}" min="0" max="${Math.max(QUEUE_CONFIGS[q as keyof typeof QUEUE_CONFIGS].jobsPerMinute * 3, 60)}" value="${QUEUE_CONFIGS[q as keyof typeof QUEUE_CONFIGS].jobsPerMinute}"
+               oninput="document.getElementById('rate-val-${q}').textContent=this.value"
+               onchange="api('/producers/${q}/rate', 'POST', {jobsPerMinute: Number(this.value)})" />
+        <span class="control-value" id="rate-val-${q}">${QUEUE_CONFIGS[q as keyof typeof QUEUE_CONFIGS].jobsPerMinute}</span>
+        <span style="font-size:11px;color:#666">/min</span>
+      </div>
+      <div class="control-row">
+        <span class="control-label">Failure %</span>
+        <input type="range" class="danger" id="fail-${q}" min="0" max="100" value="${Math.round(QUEUE_CONFIGS[q as keyof typeof QUEUE_CONFIGS].baselineFailureRate * 100)}"
+               oninput="document.getElementById('fail-val-${q}').textContent=this.value+'%'"
+               onchange="api('/chaos/${q}', 'POST', {failureRate: Number(this.value)/100})" />
+        <span class="control-value" id="fail-val-${q}">${Math.round(QUEUE_CONFIGS[q as keyof typeof QUEUE_CONFIGS].baselineFailureRate * 100)}%</span>
+      </div>
+      <div class="control-row">
+        <span class="control-label">Slowdown</span>
+        <input type="range" class="warn" id="slow-${q}" min="1" max="20" value="1"
+               oninput="document.getElementById('slow-val-${q}').textContent=this.value+'x'"
+               onchange="api('/chaos/${q}', 'POST', {slowdownFactor: Number(this.value)})" />
+        <span class="control-value" id="slow-val-${q}">1x</span>
+      </div>
+      <div class="actions">
+        <button class="btn btn-sm btn-action" onclick="promptFlood('${q}')">Flood...</button>
+        <button class="btn btn-sm btn-reset" onclick="resetQueue('${q}')">Reset Chaos</button>
+        <button class="btn btn-sm btn-danger" onclick="api('/drain/${q}', 'POST')">Drain</button>
+        <button class="btn btn-sm btn-danger" onclick="api('/clean/${q}/failed', 'POST')">Clear Failed</button>
       </div>
     </div>
+    <div class="counts" id="counts-${q}">
+      <div class="count-cell"><div class="num" id="w-${q}">0</div><div class="lbl">Wait</div></div>
+      <div class="count-cell"><div class="num" id="a-${q}">0</div><div class="lbl">Active</div></div>
+      <div class="count-cell"><div class="num" id="c-${q}">0</div><div class="lbl">Done</div></div>
+      <div class="count-cell"><div class="num" id="f-${q}">0</div><div class="lbl">Failed</div></div>
+      <div class="count-cell"><div class="num" id="d-${q}">0</div><div class="lbl">Delay</div></div>
+    </div>
+  </div>
+  `).join("")}
+</div>
 
-    <script>
-      async function chaos(queue, rate) {
-        await fetch('/chaos/' + queue, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ failureRate: rate }) });
-        loadStatus();
+<div class="presets">
+  <span class="label">Presets</span>
+  <button class="btn btn-preset" onclick="api('/preset/spike', 'POST')">Failure Spike (2m)</button>
+  <button class="btn btn-preset" onclick="api('/preset/cascade', 'POST')">Cascade (3m)</button>
+  <button class="btn btn-preset" onclick="api('/preset/flood', 'POST')">Backlog Flood</button>
+  <button class="btn btn-preset" onclick="api('/preset/slowdown', 'POST')">System Slowdown (2m)</button>
+  <button class="btn btn-preset" onclick="api('/preset/mixed', 'POST')">Mixed Errors (2m)</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2000);
+  }
+
+  async function api(path, method, body) {
+    const opts = { method, headers: {'Content-Type':'application/json'} };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(path, opts);
+    const data = await res.json();
+    toast(JSON.stringify(data).slice(0, 80));
+    refresh();
+    return data;
+  }
+
+  function promptFlood(queue) {
+    const count = prompt('How many jobs to add to ' + queue + '?', '1000');
+    if (count && !isNaN(Number(count))) {
+      api('/producers/' + queue + '/add', 'POST', { count: Number(count) });
+    }
+  }
+
+  function resetQueue(queue) {
+    api('/reset/' + queue, 'POST');
+    const failSlider = document.getElementById('fail-' + queue);
+    const slowSlider = document.getElementById('slow-' + queue);
+    if (failSlider) { failSlider.value = '0'; document.getElementById('fail-val-' + queue).textContent = '0%'; }
+    if (slowSlider) { slowSlider.value = '1'; document.getElementById('slow-val-' + queue).textContent = '1x'; }
+  }
+
+  async function refresh() {
+    try {
+      const res = await fetch('/status');
+      const data = await res.json();
+      for (const [queue, info] of Object.entries(data)) {
+        const { chaos, counts, producer } = info;
+        // Update counts
+        const el = (id) => document.getElementById(id);
+        if (el('w-'+queue)) el('w-'+queue).textContent = counts.waiting || 0;
+        if (el('a-'+queue)) el('a-'+queue).textContent = counts.active || 0;
+        if (el('c-'+queue)) el('c-'+queue).textContent = counts.completed || 0;
+        if (el('f-'+queue)) {
+          el('f-'+queue).textContent = counts.failed || 0;
+          el('f-'+queue).style.color = (counts.failed > 0) ? '#ef4444' : '#fff';
+        }
+        if (el('d-'+queue)) el('d-'+queue).textContent = counts.delayed || 0;
+
+        // Update badge
+        const badge = el('badge-'+queue);
+        if (badge) {
+          const hasChaos = chaos.failureRate > 0.05 || chaos.slowdownFactor > 1;
+          if (hasChaos) {
+            badge.textContent = 'CHAOS';
+            badge.className = 'card-badge badge-chaos';
+          } else if (producer?.running) {
+            badge.textContent = 'RUNNING';
+            badge.className = 'card-badge badge-running';
+          } else {
+            badge.textContent = 'IDLE';
+            badge.className = 'card-badge badge-idle';
+          }
+        }
       }
-      async function slow(queue, factor) {
-        await fetch('/chaos/' + queue, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ slowdownFactor: factor }) });
-        loadStatus();
-      }
-      async function flood(queue, count) {
-        await fetch('/flood/' + queue, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ count }) });
-        loadStatus();
-      }
-      async function reset(queue) {
-        await fetch('/reset/' + queue, { method: 'POST' });
-        loadStatus();
-      }
-      async function resetAll() {
-        await fetch('/reset-all', { method: 'POST' });
-        loadStatus();
-      }
-      async function preset(name) {
-        await fetch('/preset/' + name, { method: 'POST' });
-        loadStatus();
-      }
-      async function loadStatus() {
-        const res = await fetch('/status');
-        document.getElementById('status').textContent = JSON.stringify(await res.json(), null, 2);
-      }
-      loadStatus();
-      setInterval(loadStatus, 5000);
-    </script>
-    </body></html>
-  `);
+    } catch(e) { /* ignore */ }
+  }
+
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>`);
+});
+
+// ─── Producer Controls ──────────────────────────────────
+
+app.post("/producers/start-all", (req, res) => {
+  startAllProducers();
+  res.json({ status: "all producers started" });
+});
+
+app.post("/producers/stop-all", (req, res) => {
+  stopAllProducers();
+  res.json({ status: "all producers stopped" });
+});
+
+app.post("/producers/:queue/start", (req, res) => {
+  startProducer(req.params.queue);
+  res.json({ queue: req.params.queue, status: "started" });
+});
+
+app.post("/producers/:queue/stop", (req, res) => {
+  stopProducer(req.params.queue);
+  res.json({ queue: req.params.queue, status: "stopped" });
+});
+
+app.post("/producers/:queue/rate", (req, res) => {
+  const { jobsPerMinute } = req.body;
+  setProducerRate(req.params.queue, jobsPerMinute);
+  res.json({ queue: req.params.queue, jobsPerMinute });
+});
+
+app.post("/producers/:queue/add", async (req, res) => {
+  const { count = 1 } = req.body;
+  const added = addSingleJob(req.params.queue, count);
+  res.json({ queue: req.params.queue, added });
 });
 
 // ─── Chaos Controls ─────────────────────────────────────
 
-// Set chaos config for a queue
 app.post("/chaos/:queue", async (req, res) => {
   const { queue } = req.params;
   const existing = await redis.get(`chaos:${queue}`);
@@ -127,26 +295,35 @@ app.post("/chaos/:queue", async (req, res) => {
   res.json({ queue, config: updated });
 });
 
-// Flood a queue with N jobs
-app.post("/flood/:queue", async (req, res) => {
-  const { queue } = req.params;
-  const { count = 1000 } = req.body;
-  const q = new Queue(queue, { connection: redis.duplicate() });
-  const config = QUEUE_CONFIGS[queue as keyof typeof QUEUE_CONFIGS];
-  const jobName = config?.jobNames?.[0] || "floodJob";
+// ─── Queue Operations ───────────────────────────────────
 
-  const jobs = Array.from({ length: count }, (_, i) => ({
-    name: jobName,
-    data: { userId: `flood_${i}`, flooded: true, index: i },
-    opts: { attempts: 1 },
-  }));
-
-  await q.addBulk(jobs);
-  console.log(`[chaos] Flooded ${queue} with ${count} jobs`);
-  res.json({ queue, added: count });
+app.post("/drain/:queue", async (req, res) => {
+  const q = getQueue(req.params.queue);
+  if (!q) return res.status(404).json({ error: "queue not found" });
+  await q.drain();
+  console.log(`[ops] Drained ${req.params.queue}`);
+  res.json({ queue: req.params.queue, status: "drained" });
 });
 
-// Reset a single queue to normal
+app.post("/drain-all", async (req, res) => {
+  for (const queueName of Object.keys(QUEUE_CONFIGS)) {
+    const q = getQueue(queueName);
+    if (q) await q.drain();
+  }
+  console.log("[ops] Drained all queues");
+  res.json({ status: "all drained" });
+});
+
+app.post("/clean/:queue/:state", async (req, res) => {
+  const q = getQueue(req.params.queue);
+  if (!q) return res.status(404).json({ error: "queue not found" });
+  const cleaned = await q.clean(0, 0, req.params.state as any);
+  console.log(`[ops] Cleaned ${cleaned.length} ${req.params.state} jobs from ${req.params.queue}`);
+  res.json({ queue: req.params.queue, state: req.params.state, cleaned: cleaned.length });
+});
+
+// ─── Reset ──────────────────────────────────────────────
+
 app.post("/reset/:queue", async (req, res) => {
   const { queue } = req.params;
   const config = QUEUE_CONFIGS[queue as keyof typeof QUEUE_CONFIGS];
@@ -158,7 +335,6 @@ app.post("/reset/:queue", async (req, res) => {
   res.json({ queue, status: "normal" });
 });
 
-// Reset everything
 app.post("/reset-all", async (req, res) => {
   for (const [queue, config] of Object.entries(QUEUE_CONFIGS)) {
     await redis.set(`chaos:${queue}`, JSON.stringify({
@@ -170,19 +346,19 @@ app.post("/reset-all", async (req, res) => {
   res.json({ status: "all normal" });
 });
 
-// Presets — one-click scenarios
+// ─── Presets ────────────────────────────────────────────
+
 app.post("/preset/:name", async (req, res) => {
   const { name } = req.params;
 
   switch (name) {
     case "spike":
+      startProducer("email-send");
       await redis.set(`chaos:email-send`, JSON.stringify({ failureRate: 0.9, slowdownFactor: 1 }));
-      // Auto-reset after 2 minutes
       setTimeout(async () => {
         const config = QUEUE_CONFIGS["email-send"];
         await redis.set(`chaos:email-send`, JSON.stringify({
-          failureRate: config.baselineFailureRate,
-          slowdownFactor: 1,
+          failureRate: config.baselineFailureRate, slowdownFactor: 1,
         }));
         console.log("[chaos] Spike preset auto-reset");
       }, 120000);
@@ -190,28 +366,21 @@ app.post("/preset/:name", async (req, res) => {
       break;
 
     case "cascade":
-      // Step 1: email-send failures
+      startProducer("email-send");
+      startProducer("webhook-deliver");
+      startProducer("data-enrich");
       await redis.set(`chaos:email-send`, JSON.stringify({ failureRate: 0.7, slowdownFactor: 1 }));
-      // Step 2: 30s later, slow down webhook-deliver
       setTimeout(async () => {
         await redis.set(`chaos:webhook-deliver`, JSON.stringify({ failureRate: 0.03, slowdownFactor: 5 }));
       }, 30000);
-      // Step 3: 60s later, flood data-enrich
       setTimeout(async () => {
-        const q = new Queue("data-enrich", { connection: redis.duplicate() });
-        await q.addBulk(Array.from({ length: 500 }, (_, i) => ({
-          name: "enrichCompany",
-          data: { companyId: `cascade_${i}` },
-          opts: { attempts: 1 },
-        })));
+        addSingleJob("data-enrich", 500);
       }, 60000);
-      // Auto-reset after 3 minutes
       setTimeout(async () => {
         for (const queue of ["email-send", "webhook-deliver", "data-enrich"]) {
           const config = QUEUE_CONFIGS[queue as keyof typeof QUEUE_CONFIGS];
           await redis.set(`chaos:${queue}`, JSON.stringify({
-            failureRate: config.baselineFailureRate,
-            slowdownFactor: 1,
+            failureRate: config.baselineFailureRate, slowdownFactor: 1,
           }));
         }
         console.log("[chaos] Cascade preset auto-reset");
@@ -219,18 +388,14 @@ app.post("/preset/:name", async (req, res) => {
       res.json({ preset: "cascade", duration: "3 min", queues: ["email-send", "webhook-deliver", "data-enrich"] });
       break;
 
-    case "flood": {
-      const q = new Queue("email-send", { connection: redis.duplicate() });
-      await q.addBulk(Array.from({ length: 5000 }, (_, i) => ({
-        name: "sendWelcomeEmail",
-        data: { userId: `flood_${i}` },
-        opts: { attempts: 1 },
-      })));
+    case "flood":
+      startProducer("email-send");
+      addSingleJob("email-send", 5000);
       res.json({ preset: "flood", queue: "email-send", added: 5000 });
       break;
-    }
 
     case "slowdown":
+      startAllProducers();
       for (const queue of Object.keys(QUEUE_CONFIGS)) {
         const existing = await redis.get(`chaos:${queue}`);
         const current = existing ? JSON.parse(existing) : { failureRate: 0.01, slowdownFactor: 1 };
@@ -248,13 +413,12 @@ app.post("/preset/:name", async (req, res) => {
       break;
 
     case "mixed":
-      // All error types on email-send — 50% failure, evenly distributed errors
+      startProducer("email-send");
       await redis.set(`chaos:email-send`, JSON.stringify({ failureRate: 0.5, slowdownFactor: 1 }));
       setTimeout(async () => {
         const config = QUEUE_CONFIGS["email-send"];
         await redis.set(`chaos:email-send`, JSON.stringify({
-          failureRate: config.baselineFailureRate,
-          slowdownFactor: 1,
+          failureRate: config.baselineFailureRate, slowdownFactor: 1,
         }));
         console.log("[chaos] Mixed preset auto-reset");
       }, 120000);
@@ -266,19 +430,26 @@ app.post("/preset/:name", async (req, res) => {
   }
 });
 
-// Status
+// ─── Status ─────────────────────────────────────────────
+
 app.get("/status", async (req, res) => {
+  const producerStates = getProducerStates();
   const status: Record<string, any> = {};
   for (const queue of Object.keys(QUEUE_CONFIGS)) {
     const raw = await redis.get(`chaos:${queue}`);
-    const chaosConfig = raw ? JSON.parse(raw) : { failureRate: QUEUE_CONFIGS[queue as keyof typeof QUEUE_CONFIGS].baselineFailureRate, slowdownFactor: 1 };
-
-    const q = new Queue(queue, { connection: redis.duplicate() });
-    const counts = await q.getJobCounts("waiting", "active", "completed", "failed", "delayed");
+    const chaosConfig = raw ? JSON.parse(raw) : {
+      failureRate: QUEUE_CONFIGS[queue as keyof typeof QUEUE_CONFIGS].baselineFailureRate,
+      slowdownFactor: 1,
+    };
+    const q = getQueue(queue);
+    const counts = q
+      ? await q.getJobCounts("waiting", "active", "completed", "failed", "delayed")
+      : { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
 
     status[queue] = {
       chaos: chaosConfig,
       counts,
+      producer: producerStates[queue] || { running: false, jobsPerMinute: 0 },
     };
   }
   res.json(status);
