@@ -1,0 +1,19 @@
+{
+  "name": "damasqas-test-harness",
+  "private": true,
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "bullmq": "^5.0.0",
+    "express": "^4.18.0",
+    "ioredis": "^5.3.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "@types/express": "^4.17.0",
+    "@types/node": "^20.0.0"
+  }
+}
