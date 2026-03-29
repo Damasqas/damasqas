@@ -1,0 +1,47 @@
+{
+  "name": "damasqas",
+  "version": "0.1.0",
+  "description": "Standalone BullMQ queue monitoring tool",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "damasqas": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:ui": "cd ui && npm install && npm run build",
+    "prepack": "npm run build && npm run build:ui",
+    "dev": "npm run build:ui && tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "bullmq",
+    "queue",
+    "monitor",
+    "redis",
+    "dashboard"
+  ],
+  "license": "FSL-1.1-MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "bullmq": "^5.34.0",
+    "commander": "^13.1.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
