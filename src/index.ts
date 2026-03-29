@@ -1,0 +1,180 @@
+#!/usr/bin/env node
+
+import { Command } from 'commander';
+import { parseConfig } from './config.js';
+import { BullMQAdapter } from './adapters/bullmq.js';
+import { Discovery } from './discovery.js';
+import { Collector } from './collector.js';
+import { MetricsStore } from './store.js';
+import { AnomalyDetector } from './anomaly.js';
+import { Operations } from './operations.js';
+import { SlackAlert } from './alerts/slack.js';
+import { DiscordAlert } from './alerts/discord.js';
+import { backfillAll } from './backfill.js';
+import { sendCloudEvent } from './cloud.js';
+import { createServer } from './api.js';
+import type { AlertChannel } from './alerts/types.js';
+import type { DamasqasConfig, AlertPayload } from './types.js';
+
+const program = new Command();
+
+program
+  .name('damasqas')
+  .description('Standalone BullMQ queue monitoring tool')
+  .version('0.1.0')
+  .requiredOption('--redis <url>', 'Redis connection URL')
+  .option('--port <number>', 'Dashboard port', '3888')
+  .option('--prefix <string>', 'BullMQ key prefix', 'bull')
+  .option('--poll-interval <seconds>', 'Metrics collection interval', '10')
+  .option('--discovery-interval <seconds>', 'Queue discovery interval', '60')
+  .option('--retention-days <number>', 'How long to keep metrics', '30')
+  .option('--slack-webhook <url>', 'Slack incoming webhook URL')
+  .option('--discord-webhook <url>', 'Discord webhook URL')
+  .option('--cooldown <seconds>', 'Min seconds between repeat alerts', '300')
+  .option('--failure-threshold <n>', 'Alert when failures exceed Nx baseline', '3')
+  .option('--backlog-threshold <n>', 'Alert when backlog exceeds Nx baseline', '5')
+  .option('--api-key <key>', 'Damasqas Cloud API key')
+  .option('--no-dashboard', 'Run collector only, no web UI')
+  .option('--verbose', 'Debug logging')
+  .action(async (opts) => {
+    const config = parseConfig({
+      redis: opts.redis,
+      port: parseInt(opts.port, 10),
+      prefix: opts.prefix,
+      pollInterval: parseInt(opts.pollInterval, 10),
+      discoveryInterval: parseInt(opts.discoveryInterval, 10),
+      retentionDays: parseInt(opts.retentionDays, 10),
+      slackWebhook: opts.slackWebhook || null,
+      discordWebhook: opts.discordWebhook || null,
+      cooldown: parseInt(opts.cooldown, 10),
+      failureThreshold: parseFloat(opts.failureThreshold),
+      backlogThreshold: parseFloat(opts.backlogThreshold),
+      apiKey: opts.apiKey || null,
+      noDashboard: !opts.dashboard,
+      verbose: opts.verbose || false,
+    });
+
+    await start(config);
+  });
+
+async function start(config: DamasqasConfig): Promise<void> {
+  const startTime = Date.now();
+  console.log(`[damasqas] Starting with Redis: ${config.redis}`);
+  console.log(`[damasqas] Prefix: ${config.prefix}, Poll: ${config.pollInterval}s, Port: ${config.port}`);
+
+  // Initialize core components
+  const adapter = new BullMQAdapter(config.redis, config.prefix);
+  const store = new MetricsStore(config.dataDir, config.retentionDays);
+  const discovery = new Discovery(adapter, config.discoveryInterval);
+  const collector = new Collector(adapter, store, config.pollInterval, config.verbose);
+  const anomalyDetector = new AnomalyDetector(store, adapter, config);
+  const ops = new Operations(adapter);
+
+  // Set up alert channels
+  const alertChannels: AlertChannel[] = [];
+  if (config.slackWebhook) {
+    alertChannels.push(new SlackAlert(config.slackWebhook));
+    console.log('[damasqas] Slack alerts enabled');
+  }
+  if (config.discordWebhook) {
+    alertChannels.push(new DiscordAlert(config.discordWebhook));
+    console.log('[damasqas] Discord alerts enabled');
+  }
+
+  // Discovery
+  console.log('[damasqas] Discovering queues...');
+  const queues = await discovery.start();
+  console.log(`[damasqas] Found ${queues.length} queues: ${queues.join(', ') || '(none)'}`);
+
+  discovery.on('queue:added', (name: string) => {
+    console.log(`[damasqas] New queue discovered: ${name}`);
+  });
+  discovery.on('queue:removed', (name: string) => {
+    console.log(`[damasqas] Queue removed: ${name}`);
+  });
+
+  // Backfill
+  if (queues.length > 0) {
+    console.log('[damasqas] Backfilling historical data...');
+    await backfillAll(adapter, store, queues, config.verbose);
+  }
+
+  // Start collection
+  store.startCleanup();
+  collector.start(() => discovery.getQueues());
+  console.log(`[damasqas] Collector running (every ${config.pollInterval}s)`);
+
+  // Do initial collection
+  await collector.collectAll(queues);
+
+  // Anomaly detection loop — runs after each collection cycle
+  const anomalyInterval = setInterval(async () => {
+    try {
+      const currentQueues = discovery.getQueues();
+      const anomalies = await anomalyDetector.detect(currentQueues);
+
+      for (const anomaly of anomalies) {
+        if (!anomaly.alertSent && alertChannels.length > 0) {
+          const snapshot = store.getLatestSnapshot(anomaly.queue);
+          if (snapshot) {
+            const metrics = store.getLatestMetrics(anomaly.queue);
+            const topErrors = await adapter.getErrorGroups(
+              anomaly.queue,
+              Date.now() - 5 * 60 * 1000,
+              10,
+            );
+            const payload: AlertPayload = {
+              queue: anomaly.queue,
+              anomaly,
+              snapshot,
+              metrics,
+              topErrors,
+            };
+
+            for (const channel of alertChannels) {
+              try {
+                await channel.send(payload);
+              } catch (err) {
+                console.error('[damasqas] Alert send failed:', err);
+              }
+            }
+
+            if (anomaly.id) store.markAlertSent(anomaly.id);
+          }
+        }
+
+        // Cloud integration
+        await sendCloudEvent(config, anomaly);
+      }
+    } catch (err) {
+      console.error('[damasqas] Anomaly detection error:', err);
+    }
+  }, config.pollInterval * 1000);
+
+  // Start API server
+  const app = createServer(discovery, store, adapter, ops, config.redis, startTime, config.noDashboard);
+  const server = app.listen(config.port, () => {
+    if (!config.noDashboard) {
+      console.log(`[damasqas] Dashboard: http://localhost:${config.port}`);
+    }
+    console.log(`[damasqas] API: http://localhost:${config.port}/api/health`);
+    console.log('[damasqas] Ready.');
+  });
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    console.log('\n[damasqas] Shutting down...');
+    clearInterval(anomalyInterval);
+    collector.stop();
+    discovery.stop();
+    store.close();
+    await adapter.disconnect();
+    server.close();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+program.parse();
