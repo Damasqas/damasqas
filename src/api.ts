@@ -42,12 +42,20 @@ export function createServer(
 
   // Serve static dashboard UI
   if (!noDashboard) {
-    const uiPath = join(__dirname, 'ui');
-    if (existsSync(uiPath)) {
+    // When compiled: __dirname = dist/, UI at dist/ui/
+    // When running via tsx: __dirname = src/, UI at dist/ui/
+    const candidates = [
+      join(__dirname, 'ui'),
+      join(__dirname, '..', 'dist', 'ui'),
+    ];
+    const uiPath = candidates.find((p) => existsSync(join(p, 'index.html')));
+    if (uiPath) {
       app.use(express.static(uiPath));
       app.get('*', (_req, res) => {
         res.sendFile(join(uiPath, 'index.html'));
       });
+    } else {
+      console.warn('[damasqas] Dashboard UI not found. Run "npm run build:ui" first, or use --no-dashboard');
     }
   }
 
