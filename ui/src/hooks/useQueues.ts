@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 export interface QueueState {
   name: string;
@@ -40,5 +40,33 @@ export function useQueue(name: string) {
     queryKey: ['queue', name],
     queryFn: () => fetch(`/api/queues/${encodeURIComponent(name)}`).then((r) => r.json()),
     refetchInterval: 3000,
+  });
+}
+
+export function usePauseQueue(name: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      fetch(`/api/queues/${encodeURIComponent(name)}/pause`, { method: 'POST' }).then((r) =>
+        r.json(),
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue', name] });
+      qc.invalidateQueries({ queryKey: ['queues'] });
+    },
+  });
+}
+
+export function useResumeQueue(name: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      fetch(`/api/queues/${encodeURIComponent(name)}/resume`, { method: 'POST' }).then((r) =>
+        r.json(),
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue', name] });
+      qc.invalidateQueries({ queryKey: ['queues'] });
+    },
   });
 }
