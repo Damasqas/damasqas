@@ -28,8 +28,6 @@ async function getRuntimeConfig(queue: string): Promise<RuntimeConfig> {
 }
 
 export function startWorkers() {
-  const connection = new Redis(process.env.REDIS_URL!);
-
   for (const [queueName, config] of Object.entries(QUEUE_CONFIGS)) {
     if (config.workers === 0) continue;
 
@@ -57,7 +55,7 @@ export function startWorkers() {
           return { ok: true, processedIn: Math.round(actualTime) };
         },
         {
-          connection: connection.duplicate(),
+          connection: new Redis(process.env.REDIS_URL!, { maxRetriesPerRequest: null }),
           concurrency: config.concurrency,
           lockDuration: 30000,
           stalledInterval: 30000,
