@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import type { Discovery } from './discovery.js';
@@ -41,22 +41,19 @@ export function createServer(
   app.use('/api', redisRoutes(redisUrl));
 
   // Serve static dashboard UI
+  // Published package: __dirname = dist/, UI at dist/ui/ → join(__dirname, 'ui')
+  // Dev with tsx:      __dirname = src/,  UI at dist/ui/ → join(__dirname, '..', 'dist', 'ui')
   if (!noDashboard) {
-    // When compiled: __dirname = <root>/dist/, UI at <root>/dist/ui/
-    // When running via tsx: __dirname = <root>/src/, UI at <root>/dist/ui/
-    const projectRoot = resolve(__dirname, '..');
-    const candidates = [
-      join(__dirname, 'ui'),           // compiled: dist/ui/
-      join(projectRoot, 'dist', 'ui'), // dev mode: ../dist/ui/ from src/
-    ];
-    const uiPath = candidates.find((p) => existsSync(join(p, 'index.html')));
+    const uiPath = [
+      join(__dirname, 'ui'),
+      join(__dirname, '..', 'dist', 'ui'),
+    ].find((p) => existsSync(join(p, 'index.html')));
+
     if (uiPath) {
       app.use(express.static(uiPath));
       app.get('*', (_req, res) => {
         res.sendFile(join(uiPath, 'index.html'));
       });
-    } else {
-      console.warn('[damasqas] Dashboard UI not found. Run "npm run build:ui" first, or use --no-dashboard');
     }
   }
 

@@ -7,11 +7,14 @@
   "bin": {
     "damasqas": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
-    "build:ui": "cd ui && npm run build",
-    "build:all": "npm run build && npm run build:ui",
-    "dev": "tsx src/index.ts",
+    "build:ui": "cd ui && npm install && npm run build",
+    "prepack": "npm run build && npm run build:ui",
+    "dev": "npm run build:ui && tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
