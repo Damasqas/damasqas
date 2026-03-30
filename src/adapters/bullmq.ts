@@ -88,6 +88,7 @@ export class BullMQAdapter implements QueueAdapter {
   async getSnapshot(queue: string): Promise<QueueSnapshot> {
     const key = (suffix: string) => `${this.prefix}:${queue}:${suffix}`;
     const now = Date.now();
+    const overdueUpperBound = this.adjustedNow() - 60_000;
 
     const pipeline = this.cmd.pipeline();
     pipeline.llen(key('wait'));           // 0
@@ -99,6 +100,9 @@ export class BullMQAdapter implements QueueAdapter {
     pipeline.lindex(key('wait'), -1);     // 6: oldest waiting job ID
     pipeline.zcard(key('prioritized'));      // 7
     pipeline.llen(key('waiting-children')); // 8
+    if (overdueUpperBound > 0) {
+      pipeline.zcount(key('delayed'), '0', String(overdueUpperBound)); // 9
+    }
 
     const results = await pipeline.exec();
     if (!results) throw new Error(`Failed to get snapshot for queue ${queue}`);
@@ -112,6 +116,7 @@ export class BullMQAdapter implements QueueAdapter {
     const oldestWaitingId = pipelineVal(results, 6) as string | null;
     const prioritized = pipelineInt(results, 7);
     const waitingChildren = pipelineInt(results, 8);
+    const overdueDelayed = overdueUpperBound > 0 ? pipelineInt(results, 9) : 0;
 
     // Get oldest waiting age
     let oldestWaitingAge: number | null = null;
@@ -146,12 +151,6 @@ export class BullMQAdapter implements QueueAdapter {
         }
       }
     }
-
-    // Count overdue delayed jobs (score < now - 60s grace period)
-    const overdueUpperBound = this.adjustedNow() - 60_000;
-    const overdueDelayed = overdueUpperBound > 0
-      ? await this.cmd.zcount(key('delayed'), '0', String(overdueUpperBound))
-      : 0;
 
     return {
       queue,
@@ -677,7 +676,10 @@ export class BullMQAdapter implements QueueAdapter {
     const results = await pipeline.exec();
 
     const jobs: OverdueDelayedJob[] = [];
-    const realNow = Date.now();
+    // Use adjustedNow() so overdueByMs is relative to the same clock domain
+    // (Redis time) as the ZRANGEBYSCORE filter. Without this, clock skew causes
+    // the alert engine threshold check to disagree with the ZRANGEBYSCORE filter.
+    const now = this.adjustedNow();
     for (let i = 0; i < entries.length; i++) {
       const { id, score } = entries[i]!;
       const err = results?.[i]?.[0];
@@ -691,7 +693,7 @@ export class BullMQAdapter implements QueueAdapter {
         delay: parseInt(fields[1] || '0', 10),
         timestamp: parseInt(fields[2] || '0', 10),
         scheduledFor,
-        overdueByMs: realNow - scheduledFor,
+        overdueByMs: now - scheduledFor,
       });
     }
 
