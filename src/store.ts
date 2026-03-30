@@ -670,15 +670,57 @@ export class MetricsStore {
     return rows.map((r) => this.rowToEvent(r));
   }
 
-  searchEvents(query: string, limit = 100): EventRecord[] {
-    const rows = this.db.prepare(`
-      SELECT e.* FROM events e
+  searchEvents(
+    query: string,
+    limit = 100,
+    offset = 0,
+    queue?: string,
+    eventType?: string,
+    from?: number,
+    to?: number,
+  ): { events: EventRecord[]; total: number } {
+    let sql = `SELECT e.* FROM events e
       JOIN events_fts fts ON e.id = fts.rowid
-      WHERE events_fts MATCH ?
-      ORDER BY e.ts DESC LIMIT ?
-    `).all(query, limit) as Record<string, unknown>[];
+      WHERE events_fts MATCH ?`;
+    let countSql = `SELECT COUNT(*) as cnt FROM events e
+      JOIN events_fts fts ON e.id = fts.rowid
+      WHERE events_fts MATCH ?`;
+    const params: unknown[] = [query];
 
-    return rows.map((r) => this.rowToEvent(r));
+    if (queue) {
+      const clause = ' AND e.queue = ?';
+      sql += clause;
+      countSql += clause;
+      params.push(queue);
+    }
+    if (eventType) {
+      const clause = ' AND e.event_type = ?';
+      sql += clause;
+      countSql += clause;
+      params.push(eventType);
+    }
+    if (from != null) {
+      const clause = ' AND e.ts >= ?';
+      sql += clause;
+      countSql += clause;
+      params.push(from);
+    }
+    if (to != null) {
+      const clause = ' AND e.ts <= ?';
+      sql += clause;
+      countSql += clause;
+      params.push(to);
+    }
+
+    const countRow = this.db.prepare(countSql).get(...params) as { cnt: number };
+
+    sql += ' ORDER BY e.ts DESC LIMIT ? OFFSET ?';
+    const rows = this.db.prepare(sql).all(...params, limit, offset) as Record<string, unknown>[];
+
+    return {
+      events: rows.map((r) => this.rowToEvent(r)),
+      total: countRow.cnt,
+    };
   }
 
   // ── Stream Cursor Methods ─────────────────────────────────────────────
@@ -717,14 +759,17 @@ export class MetricsStore {
     return rows.map((r) => r.job_id);
   }
 
-  batchUpdateJobNames(updates: { queue: string; jobId: string; jobName: string }[]): void {
+  batchUpdateJobNames(updates: { queue: string; jobId: string; jobName: string; jobData?: string | null }[]): void {
     if (updates.length === 0) return;
 
     const selectStmt = this.db.prepare(
       'SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE queue = ? AND job_id = ? AND job_name IS NULL',
     );
-    const updateStmt = this.db.prepare(
+    const updateNameStmt = this.db.prepare(
       'UPDATE events SET job_name = ? WHERE queue = ? AND job_id = ? AND job_name IS NULL',
+    );
+    const updateRowStmt = this.db.prepare(
+      'UPDATE events SET job_name = ?, data = ? WHERE id = ?',
     );
     const ftsDelete = this.db.prepare(
       "INSERT INTO events_fts (events_fts, rowid, job_id, job_name, queue, event_type, data) VALUES ('delete', ?, ?, ?, ?, ?, ?)",
@@ -734,17 +779,29 @@ export class MetricsStore {
     );
 
     const tx = this.db.transaction(() => {
-      for (const { queue, jobId, jobName } of updates) {
+      for (const { queue, jobId, jobName, jobData } of updates) {
         // Get affected rows for FTS sync before updating
         const rows = selectStmt.all(queue, jobId) as Record<string, unknown>[];
 
-        // Update the events
-        updateStmt.run(jobName, queue, jobId);
+        if (jobData) {
+          // Merge job payload into each event's data for FTS indexing.
+          // Each event may have different event-specific data, so we
+          // update per-row to preserve individual event fields.
+          for (const row of rows) {
+            const mergedData = this.mergeJobPayload(row.data as string | null, jobData);
+            ftsDelete.run(row.id, row.job_id, row.job_name, row.queue, row.event_type, row.data);
+            updateRowStmt.run(jobName, mergedData, row.id);
+            ftsInsert.run(row.id, row.job_id, jobName, row.queue, row.event_type, mergedData);
+          }
+        } else {
+          // No payload — bulk update job name
+          updateNameStmt.run(jobName, queue, jobId);
 
-        // Re-index FTS for affected rows
-        for (const row of rows) {
-          ftsDelete.run(row.id, row.job_id, row.job_name, row.queue, row.event_type, row.data);
-          ftsInsert.run(row.id, row.job_id, jobName, row.queue, row.event_type, row.data);
+          // Re-index FTS for affected rows
+          for (const row of rows) {
+            ftsDelete.run(row.id, row.job_id, row.job_name, row.queue, row.event_type, row.data);
+            ftsInsert.run(row.id, row.job_id, jobName, row.queue, row.event_type, row.data);
+          }
         }
       }
     });
@@ -1514,6 +1571,32 @@ export class MetricsStore {
       ts: row.ts as number,
       data: row.data as string | null,
     };
+  }
+
+  /**
+   * Merge a truncated job payload into the event's existing data JSON.
+   * The payload is stored under the `_jobData` key so it becomes searchable
+   * via FTS without clobbering the original event fields.
+   *
+   * Attempts to parse the payload JSON to avoid double-encoding (the Redis
+   * `data` field is already JSON-stringified by BullMQ). Falls back to
+   * storing as a string if parsing fails (e.g. truncated payload).
+   */
+  private mergeJobPayload(existingData: string | null, jobPayload: string): string {
+    try {
+      const parsed = existingData ? JSON.parse(existingData) : {};
+      try {
+        parsed._jobData = JSON.parse(jobPayload);
+      } catch {
+        // Payload may be truncated (500-char limit) producing invalid JSON.
+        // Store as string — FTS tokenizer still extracts searchable terms.
+        parsed._jobData = jobPayload;
+      }
+      return JSON.stringify(parsed);
+    } catch {
+      // If existing data isn't valid JSON, wrap both
+      return JSON.stringify({ _raw: existingData, _jobData: jobPayload });
+    }
   }
 
   private rowToErrorGroup(row: Record<string, unknown>): ErrorGroupRecord {

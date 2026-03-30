@@ -90,10 +90,17 @@ export function EventTimeline() {
     jobName: debouncedJobName || undefined,
   });
 
-  const { data: searchData } = useEventSearch(searchQuery);
+  const { data: searchData } = useEventSearch({
+    query: searchQuery,
+    limit: PAGE_SIZE,
+    offset,
+    queue: queueFilter || undefined,
+    type: typeFilter || undefined,
+    rangeMs: RANGE_MS[range],
+  });
 
   const events = searchQuery ? (searchData?.events || []) : (eventsData?.events || []);
-  const total = searchQuery ? (searchData?.events?.length || 0) : (eventsData?.total || 0);
+  const total = searchQuery ? (searchData?.total || 0) : (eventsData?.total || 0);
   const isSearchMode = searchQuery.length > 0;
 
   const resetPagination = () => setOffset(0);
@@ -257,7 +264,7 @@ export function EventTimeline() {
       )}
 
       {/* Pagination */}
-      {!isSearchMode && total > PAGE_SIZE && (
+      {total > PAGE_SIZE && (
         <div style={{
           display: 'flex',
           justifyContent: 'center',
