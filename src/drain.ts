@@ -111,8 +111,9 @@ export class DrainAnalyzer {
       : 0;
 
     // Determine trend
+    // A paused queue with no active workers is intentionally idle, not stalled.
     let trend: DrainAnalysis['trend'];
-    if (current.active === 0 && current.waiting > 0) {
+    if (current.active === 0 && current.waiting > 0 && !current.paused) {
       trend = 'stalled';
     } else if (netRate > 1) {
       trend = 'draining';
