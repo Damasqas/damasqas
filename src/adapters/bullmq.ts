@@ -843,7 +843,7 @@ export class BullMQAdapter implements QueueAdapter {
     };
   }
 
-  async collectKeySizes(queues: string[], prefix: string): Promise<RedisKeySize[]> {
+  async collectKeySizes(queues: string[]): Promise<RedisKeySize[]> {
     if (queues.length === 0) return [];
 
     const ts = Date.now();
@@ -851,7 +851,7 @@ export class BullMQAdapter implements QueueAdapter {
     const keyMap: { queue: string; keyType: string }[] = [];
 
     for (const queue of queues) {
-      const base = `${prefix}:${queue}`;
+      const base = `${this.prefix}:${queue}`;
       // events stream
       pipeline.xlen(`${base}:events`);
       keyMap.push({ queue, keyType: 'events' });
@@ -870,6 +870,12 @@ export class BullMQAdapter implements QueueAdapter {
       // delayed sorted set
       pipeline.zcard(`${base}:delayed`);
       keyMap.push({ queue, keyType: 'delayed' });
+      // prioritized sorted set (BullMQ v5: holds waiting jobs when priorities enabled)
+      pipeline.zcard(`${base}:prioritized`);
+      keyMap.push({ queue, keyType: 'prioritized' });
+      // waiting-children list (BullMQ v5: parent jobs waiting for child flows)
+      pipeline.llen(`${base}:waiting-children`);
+      keyMap.push({ queue, keyType: 'waiting-children' });
     }
 
     const results = (await pipeline.exec())! as [Error | null, unknown][];
@@ -889,7 +895,7 @@ export class BullMQAdapter implements QueueAdapter {
     return sizes;
   }
 
-  async collectKeyMemoryUsage(queues: string[], prefix: string): Promise<RedisKeySize[]> {
+  async collectKeyMemoryUsage(queues: string[]): Promise<RedisKeySize[]> {
     if (queues.length === 0) return [];
 
     const ts = Date.now();
@@ -898,7 +904,7 @@ export class BullMQAdapter implements QueueAdapter {
     const keyTypes = ['events', 'completed', 'failed'] as const;
 
     for (const queue of queues) {
-      const base = `${prefix}:${queue}`;
+      const base = `${this.prefix}:${queue}`;
       for (const keyType of keyTypes) {
         pipeline.call('MEMORY', 'USAGE', `${base}:${keyType}`);
         keyMap.push({ queue, keyType });

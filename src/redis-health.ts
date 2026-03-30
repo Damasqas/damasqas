@@ -33,7 +33,6 @@ export class RedisHealthCollector {
     adapter: QueueAdapter,
     store: MetricsStore,
     queues: string[],
-    prefix: string,
     redisKeyMemoryUsage: boolean,
   ): Promise<void> {
     // Always: collect Redis INFO snapshot
@@ -69,7 +68,7 @@ export class RedisHealthCollector {
     if (this.keySizeTickCount >= this.keySizeEveryNTicks) {
       this.keySizeTickCount = 0;
       try {
-        const sizes = await adapter.collectKeySizes(queues, prefix);
+        const sizes = await adapter.collectKeySizes(queues);
         if (sizes.length > 0) {
           store.insertRedisKeySizes(sizes);
         }
@@ -84,7 +83,7 @@ export class RedisHealthCollector {
       if (this.memoryUsageTickCount >= this.memUsageEveryNTicks) {
         this.memoryUsageTickCount = 0;
         try {
-          const memSizes = await adapter.collectKeyMemoryUsage(queues, prefix);
+          const memSizes = await adapter.collectKeyMemoryUsage(queues);
           if (memSizes.length > 0) {
             store.insertRedisKeySizes(memSizes);
           }
@@ -156,10 +155,52 @@ export class RedisHealthCollector {
           entryDelta,
           memoryBytes: curr.memoryBytes,
           memoryDelta,
+          recommendation: getRecommendation(curr.keyType, curr.queue, curr.entryCount, entryDelta),
         };
       })
       .filter((g) => g.entryDelta > 0 || (g.memoryDelta != null && g.memoryDelta > 0))
       .sort((a, b) => (b.memoryDelta ?? b.entryDelta) - (a.memoryDelta ?? a.entryDelta));
+  }
+}
+
+/**
+ * Generate BullMQ-specific remediation advice based on which key type is growing.
+ */
+function getRecommendation(
+  keyType: string,
+  queue: string,
+  entries: number,
+  entryDelta: number,
+): string | null {
+  if (entryDelta <= 0) return null;
+
+  switch (keyType) {
+    case 'events':
+      return `Stream not being trimmed. Configure streams.events.maxLen in queue options, ` +
+        `or run: XTRIM bull:${queue}:events MAXLEN ~ 10000`;
+    case 'completed':
+      return `Configure removeOnComplete: { count: 1000 } on the ${queue} queue ` +
+        `to auto-prune old completed jobs`;
+    case 'failed':
+      return entries > 10000
+        ? `Review and retry or clean failed jobs. ` +
+          `Configure removeOnFail: { count: 5000 } on the ${queue} queue`
+        : `Review and retry failed jobs in the ${queue} queue`;
+    case 'wait':
+    case 'prioritized':
+      return `Workers not keeping up with inflow. ` +
+        `Add more workers or increase concurrency for the ${queue} queue`;
+    case 'delayed':
+      return `Delayed job backlog growing. Check if scheduled jobs are being created ` +
+        `faster than they can be promoted and processed`;
+    case 'waiting-children':
+      return `Parent jobs accumulating. Check if child jobs in flows are completing — ` +
+        `stuck child jobs will block parent jobs indefinitely`;
+    case 'active':
+      return `Active jobs growing without draining. Check for stalled processors ` +
+        `or increase stalled job check interval`;
+    default:
+      return null;
   }
 }
 

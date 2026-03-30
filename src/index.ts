@@ -110,7 +110,6 @@ async function start(config: DamasqasConfig): Promise<void> {
     config.pollInterval,
     config.discoveryInterval,
     config.verbose,
-    config.prefix,
     config.redisKeyMemoryUsage,
   );
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import {
   AreaChart,
   Area,
@@ -352,7 +352,8 @@ function GrowthTable({ growth }: { growth: KeyGrowth[] }) {
         </thead>
         <tbody>
           {growth.slice(0, 10).map((g, i) => (
-            <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+            <Fragment key={i}>
+            <tr style={{ borderBottom: g.recommendation ? 'none' : '1px solid rgba(255,255,255,0.04)' }}>
               <td style={tdStyle}>
                 <span style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{g.queue}</span>
               </td>
@@ -391,6 +392,19 @@ function GrowthTable({ growth }: { growth: KeyGrowth[] }) {
                 )}
               </td>
             </tr>
+            {g.recommendation && (
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                <td colSpan={5} style={{
+                  padding: '4px 12px 10px',
+                  fontSize: 11,
+                  color: '#f59e0b',
+                  fontStyle: 'italic',
+                }}>
+                  {g.recommendation}
+                </td>
+              </tr>
+            )}
+            </Fragment>
           ))}
         </tbody>
       </table>

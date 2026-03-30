@@ -31,7 +31,6 @@ export class Collector {
   private tickCount = 0;
   private discoveryEveryNTicks: number;
   private analysisEveryNTicks: number;
-  private prefix: string;
   private redisKeyMemoryUsage: boolean;
 
   // Separate map to track the snapshot used as the basis for the last
@@ -50,7 +49,6 @@ export class Collector {
     pollIntervalSeconds: number,
     discoveryIntervalSeconds: number,
     verbose = false,
-    prefix = 'bull',
     redisKeyMemoryUsage = true,
   ) {
     this.adapter = adapter;
@@ -60,8 +58,6 @@ export class Collector {
     this.alertEngine = alertEngine;
     this.pollInterval = pollIntervalSeconds * 1000;
     this.verbose = verbose;
-
-    this.prefix = prefix;
     this.redisKeyMemoryUsage = redisKeyMemoryUsage;
 
     // Discovery runs every M ticks (default: 60s / 1s = every 60th tick)
@@ -172,7 +168,6 @@ export class Collector {
             this.adapter,
             this.store,
             queues,
-            this.prefix,
             this.redisKeyMemoryUsage,
           );
         } catch (err) {

@@ -265,4 +265,5 @@ export interface KeyGrowth {
   entryDelta: number;
   memoryBytes: number | null;
   memoryDelta: number | null;
+  recommendation: string | null;
 }

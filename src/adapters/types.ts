@@ -63,8 +63,8 @@ export interface QueueAdapter {
 
   // Redis health
   collectRedisInfo(): Promise<RedisSnapshot>;
-  collectKeySizes(queues: string[], prefix: string): Promise<RedisKeySize[]>;
-  collectKeyMemoryUsage(queues: string[], prefix: string): Promise<RedisKeySize[]>;
+  collectKeySizes(queues: string[]): Promise<RedisKeySize[]>;
+  collectKeyMemoryUsage(queues: string[]): Promise<RedisKeySize[]>;
   collectSlowlog(): Promise<{ entries: SlowlogEntry[]; totalCount: number }>;
   checkMaxmemoryPolicy(): Promise<string>;
 
