@@ -246,6 +246,7 @@ export interface RedisKeySize {
 }
 
 export interface SlowlogEntry {
+  slowlogId?: number;  // Redis slowlog unique ID (monotonically increasing), used for dedup
   ts: number;
   durationUs: number;
   command: string;

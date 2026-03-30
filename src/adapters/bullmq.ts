@@ -936,15 +936,17 @@ export class BullMQAdapter implements QueueAdapter {
     for (const entry of rawEntries) {
       if (!Array.isArray(entry) || entry.length < 4) continue;
       // Slowlog entry: [id, timestamp, duration_us, [command, args...], ...]
+      const slowlogId = entry[0] as number;
       const tsSeconds = entry[1] as number;
       const durationUs = entry[2] as number;
       const cmdArgs = entry[3] as string[];
       const command = Array.isArray(cmdArgs) ? cmdArgs.join(' ') : String(cmdArgs);
 
-      // Check if BullMQ-related: EVALSHA with bull:* key arguments
+      // Check if BullMQ-related: EVALSHA with key arguments matching the prefix
       const isBullMQ = this.isBullMQCommand(command);
 
       entries.push({
+        slowlogId,
         ts: tsSeconds * 1000,
         durationUs,
         command: command.length > 500 ? command.slice(0, 500) + '...' : command,
@@ -964,7 +966,8 @@ export class BullMQAdapter implements QueueAdapter {
   private isBullMQCommand(command: string): boolean {
     const upper = command.toUpperCase();
     if (!upper.startsWith('EVALSHA')) return false;
-    return command.includes('bull:');
+    // Match against the configured prefix (e.g., 'bull:') rather than hardcoding
+    return command.includes(`${this.prefix}:`);
   }
 
   async disconnect(): Promise<void> {

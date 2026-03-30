@@ -839,33 +839,81 @@ export class MetricsStore {
   }
 
   getLatestKeySizes(): RedisKeySize[] {
-    // Get the most recent timestamp that has key size data
-    const tsRow = this.db.prepare(
-      'SELECT MAX(ts) as max_ts FROM redis_key_sizes',
+    // Key sizes (entry counts) and memory usage are collected at different
+    // cadences (5min vs 30min) and stored with different timestamps.
+    // We merge: take the latest entry-count rows, then overlay the latest
+    // memory-bytes data on top by matching (queue, key_type).
+
+    // Latest entry-count rows (entry_count > 0)
+    const entryTsRow = this.db.prepare(
+      'SELECT MAX(ts) as max_ts FROM redis_key_sizes WHERE entry_count > 0',
+    ).get() as { max_ts: number | null } | undefined;
+    if (!entryTsRow?.max_ts) return [];
+
+    const entryRows = this.db.prepare(
+      'SELECT * FROM redis_key_sizes WHERE ts = ? AND entry_count > 0 ORDER BY entry_count DESC',
+    ).all(entryTsRow.max_ts) as Record<string, unknown>[];
+
+    const sizes = entryRows.map((r) => this.rowToRedisKeySize(r));
+
+    // Latest memory-bytes rows (memory_bytes IS NOT NULL)
+    const memTsRow = this.db.prepare(
+      'SELECT MAX(ts) as max_ts FROM redis_key_sizes WHERE memory_bytes IS NOT NULL',
     ).get() as { max_ts: number | null } | undefined;
 
-    if (!tsRow?.max_ts) return [];
+    if (memTsRow?.max_ts) {
+      const memRows = this.db.prepare(
+        'SELECT queue, key_type, memory_bytes FROM redis_key_sizes WHERE ts = ? AND memory_bytes IS NOT NULL',
+      ).all(memTsRow.max_ts) as Record<string, unknown>[];
 
-    const rows = this.db.prepare(
-      'SELECT * FROM redis_key_sizes WHERE ts = ? ORDER BY entry_count DESC',
-    ).all(tsRow.max_ts) as Record<string, unknown>[];
+      // Overlay memory data onto entry-count rows
+      const memMap = new Map<string, number>();
+      for (const r of memRows) {
+        memMap.set(`${r.queue}:${r.key_type}`, r.memory_bytes as number);
+      }
+      for (const s of sizes) {
+        const mem = memMap.get(`${s.queue}:${s.keyType}`);
+        if (mem !== undefined) s.memoryBytes = mem;
+      }
+    }
 
-    return rows.map((r) => this.rowToRedisKeySize(r));
+    return sizes;
   }
 
   getPreviousKeySizes(beforeTs: number): RedisKeySize[] {
-    // Get the most recent collection before the given timestamp
-    const tsRow = this.db.prepare(
-      'SELECT MAX(ts) as max_ts FROM redis_key_sizes WHERE ts < ?',
+    // Same merge strategy as getLatestKeySizes but looking before the given timestamp.
+    const entryTsRow = this.db.prepare(
+      'SELECT MAX(ts) as max_ts FROM redis_key_sizes WHERE ts < ? AND entry_count > 0',
+    ).get(beforeTs) as { max_ts: number | null } | undefined;
+    if (!entryTsRow?.max_ts) return [];
+
+    const entryRows = this.db.prepare(
+      'SELECT * FROM redis_key_sizes WHERE ts = ? AND entry_count > 0 ORDER BY entry_count DESC',
+    ).all(entryTsRow.max_ts) as Record<string, unknown>[];
+
+    const sizes = entryRows.map((r) => this.rowToRedisKeySize(r));
+
+    // Overlay memory data from the latest memory collection before this point
+    const memTsRow = this.db.prepare(
+      'SELECT MAX(ts) as max_ts FROM redis_key_sizes WHERE ts < ? AND memory_bytes IS NOT NULL',
     ).get(beforeTs) as { max_ts: number | null } | undefined;
 
-    if (!tsRow?.max_ts) return [];
+    if (memTsRow?.max_ts) {
+      const memRows = this.db.prepare(
+        'SELECT queue, key_type, memory_bytes FROM redis_key_sizes WHERE ts = ? AND memory_bytes IS NOT NULL',
+      ).all(memTsRow.max_ts) as Record<string, unknown>[];
 
-    const rows = this.db.prepare(
-      'SELECT * FROM redis_key_sizes WHERE ts = ? ORDER BY entry_count DESC',
-    ).all(tsRow.max_ts) as Record<string, unknown>[];
+      const memMap = new Map<string, number>();
+      for (const r of memRows) {
+        memMap.set(`${r.queue}:${r.key_type}`, r.memory_bytes as number);
+      }
+      for (const s of sizes) {
+        const mem = memMap.get(`${s.queue}:${s.keyType}`);
+        if (mem !== undefined) s.memoryBytes = mem;
+      }
+    }
 
-    return rows.map((r) => this.rowToRedisKeySize(r));
+    return sizes;
   }
 
   getKeySizeHistory(queue: string, since: number, until: number): RedisKeySize[] {

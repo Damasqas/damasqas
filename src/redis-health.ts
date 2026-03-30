@@ -16,7 +16,7 @@ export class RedisHealthCollector {
   private memoryUsageTickCount = 0;
   private keySizeEveryNTicks: number;
   private memUsageEveryNTicks: number;
-  private lastSlowlogTs = 0;
+  private lastSlowlogId = -1;
 
   constructor(analysisIntervalSeconds: number) {
     // Key sizes every 5 minutes
@@ -50,13 +50,15 @@ export class RedisHealthCollector {
       console.error('[redis-health] Failed to collect Redis INFO:', err);
     }
 
-    // Always: collect slowlog (deduplicate by timestamp)
+    // Always: collect slowlog (deduplicate by Redis slowlog entry ID)
     try {
       const { entries } = await adapter.collectSlowlog();
-      const newEntries = entries.filter((e) => e.ts > this.lastSlowlogTs);
+      // Slowlog IDs are monotonically increasing; only store entries newer
+      // than the last seen ID to avoid duplicates across poll cycles.
+      const newEntries = entries.filter((e) => e.slowlogId != null && e.slowlogId > this.lastSlowlogId);
       if (newEntries.length > 0) {
         store.insertSlowlogEntries(newEntries);
-        this.lastSlowlogTs = Math.max(...newEntries.map((e) => e.ts));
+        this.lastSlowlogId = Math.max(...newEntries.map((e) => e.slowlogId!));
       }
     } catch (err) {
       console.error('[redis-health] Failed to collect slowlog:', err);
