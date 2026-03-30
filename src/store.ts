@@ -777,14 +777,14 @@ export class MetricsStore {
    * Find completed events that haven't been timing-hydrated yet.
    * Uses LEFT JOIN against job_timings to find events without a matching row.
    */
-  getUnhydratedTimingEvents(queue: string, limit = 200): { id: number; queue: string; jobId: string; ts: number }[] {
+  getUnhydratedTimingEvents(queue: string, limit = 200): { id: number; queue: string; jobId: string; jobName: string; ts: number }[] {
     return this.db.prepare(`
-      SELECT e.id, e.queue, e.job_id as jobId, e.ts
+      SELECT e.id, e.queue, e.job_id as jobId, e.job_name as jobName, e.ts
       FROM events e
       LEFT JOIN job_timings jt ON e.queue = jt.queue AND e.job_id = jt.job_id
       WHERE e.queue = ? AND e.event_type = 'completed' AND e.job_name IS NOT NULL AND jt.id IS NULL
       LIMIT ?
-    `).all(queue, limit) as { id: number; queue: string; jobId: string; ts: number }[];
+    `).all(queue, limit) as { id: number; queue: string; jobId: string; jobName: string; ts: number }[];
   }
 
   /**
@@ -854,8 +854,8 @@ export class MetricsStore {
         job_name,
         SUM(completed) as completed,
         SUM(failed) as failed,
-        SUM(avg_wait_ms * completed) / NULLIF(SUM(completed), 0) as avg_wait_ms,
-        SUM(avg_process_ms * completed) / NULLIF(SUM(completed), 0) as avg_process_ms,
+        SUM(COALESCE(avg_wait_ms, 0) * completed) / NULLIF(SUM(CASE WHEN avg_wait_ms IS NOT NULL THEN completed ELSE 0 END), 0) as avg_wait_ms,
+        SUM(COALESCE(avg_process_ms, 0) * completed) / NULLIF(SUM(CASE WHEN avg_process_ms IS NOT NULL THEN completed ELSE 0 END), 0) as avg_process_ms,
         MAX(p95_process_ms) as p95_process_ms
       FROM job_type_summaries
       WHERE queue = ? AND minute_ts >= ? AND minute_ts <= ?
@@ -919,21 +919,36 @@ export class MetricsStore {
       avg_wait_ms: number | null; avg_process_ms: number | null;
     }[];
 
-    const timingKey = (q: string, n: string, t: number) => `${q}|${n}|${t}`;
-    const timingMap = new Map(timingRows.map((r) => [timingKey(r.queue, r.job_name, r.minute_ts), r]));
+    // Build a nested lookup: timingLookup[queue][job_name][minute_ts] -> timing row
+    const timingLookup = new Map<string, Map<string, Map<number, typeof timingRows[0]>>>();
+    for (const r of timingRows) {
+      if (!timingLookup.has(r.queue)) timingLookup.set(r.queue, new Map());
+      const qMap = timingLookup.get(r.queue)!;
+      if (!qMap.has(r.job_name)) qMap.set(r.job_name, new Map());
+      qMap.get(r.job_name)!.set(r.minute_ts, r);
+    }
 
     // Compute p95 per (queue, job_name, minute) bucket
-    const p95Map = new Map<string, number>();
-    const buckets = new Set(eventRows.map((r) => timingKey(r.queue, r.job_name, r.minute_ts)));
-    for (const key of buckets) {
-      const [queue, jobName, minuteTsStr] = key.split('|');
-      const minuteTs = Number(minuteTsStr);
-      const processTimes = this.db.prepare(
-        'SELECT process_ms FROM job_timings WHERE queue = ? AND job_name = ? AND ts >= ? AND ts < ? ORDER BY process_ms',
-      ).all(queue, jobName, minuteTs, minuteTs + 60000) as { process_ms: number }[];
+    const p95Lookup = new Map<string, Map<string, Map<number, number>>>();
+    const p95Stmt = this.db.prepare(
+      'SELECT process_ms FROM job_timings WHERE queue = ? AND job_name = ? AND ts >= ? AND ts < ? ORDER BY process_ms',
+    );
+
+    // Deduplicate buckets to avoid redundant queries
+    const seen = new Set<string>();
+    for (const r of eventRows) {
+      const bucketKey = JSON.stringify([r.queue, r.job_name, r.minute_ts]);
+      if (seen.has(bucketKey)) continue;
+      seen.add(bucketKey);
+
+      const processTimes = p95Stmt.all(r.queue, r.job_name, r.minute_ts, r.minute_ts + 60000) as { process_ms: number }[];
       if (processTimes.length > 0) {
         const idx = Math.floor(processTimes.length * 0.95);
-        p95Map.set(key, processTimes[Math.min(idx, processTimes.length - 1)]!.process_ms);
+        const p95 = processTimes[Math.min(idx, processTimes.length - 1)]!.process_ms;
+        if (!p95Lookup.has(r.queue)) p95Lookup.set(r.queue, new Map());
+        const qMap = p95Lookup.get(r.queue)!;
+        if (!qMap.has(r.job_name)) qMap.set(r.job_name, new Map());
+        qMap.get(r.job_name)!.set(r.minute_ts, p95);
       }
     }
 
@@ -944,14 +959,14 @@ export class MetricsStore {
 
     const tx = this.db.transaction(() => {
       for (const r of eventRows) {
-        const key = timingKey(r.queue, r.job_name, r.minute_ts);
-        const timing = timingMap.get(key);
+        const timing = timingLookup.get(r.queue)?.get(r.job_name)?.get(r.minute_ts);
+        const p95 = p95Lookup.get(r.queue)?.get(r.job_name)?.get(r.minute_ts);
         upsertStmt.run(
           r.queue, r.job_name, r.minute_ts,
           r.completed, r.failed,
           timing?.avg_wait_ms ?? null,
           timing?.avg_process_ms ?? null,
-          p95Map.get(key) ?? null,
+          p95 ?? null,
         );
       }
     });

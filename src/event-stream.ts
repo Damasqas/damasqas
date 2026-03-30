@@ -292,7 +292,7 @@ export class EventStreamConsumer {
     const queues = this.discovery.getQueues();
 
     // Collect all (queue, jobId) pairs for completed events without timings
-    const work: { id: number; queue: string; jobId: string; ts: number }[] = [];
+    const work: { id: number; queue: string; jobId: string; jobName: string; ts: number }[] = [];
     for (const queue of queues) {
       const events = this.store.getUnhydratedTimingEvents(queue);
       for (const event of events) {
@@ -302,10 +302,10 @@ export class EventStreamConsumer {
 
     if (work.length === 0) return;
 
-    // Single pipeline for all HMGET calls
+    // Single pipeline for all HMGET calls (only need timing fields, name already hydrated)
     const pipeline = this.cmdRedis.pipeline();
     for (const { queue, jobId } of work) {
-      pipeline.hmget(`${this.prefix}:${queue}:${jobId}`, 'timestamp', 'processedOn', 'finishedOn', 'name');
+      pipeline.hmget(`${this.prefix}:${queue}:${jobId}`, 'timestamp', 'processedOn', 'finishedOn');
     }
 
     const results = await pipeline.exec();
@@ -316,7 +316,7 @@ export class EventStreamConsumer {
       const [err, fields] = results[i]!;
       if (err || !fields) continue;
 
-      const [timestamp, processedOn, finishedOn, name] = fields as (string | null)[];
+      const [timestamp, processedOn, finishedOn] = fields as (string | null)[];
       if (!timestamp || !processedOn || !finishedOn) continue;
 
       const ts = Number(timestamp);
@@ -333,7 +333,7 @@ export class EventStreamConsumer {
 
       timings.push({
         queue: work[i]!.queue,
-        jobName: name || '[unknown]',
+        jobName: work[i]!.jobName,
         jobId: work[i]!.jobId,
         ts: work[i]!.ts,
         waitMs,
