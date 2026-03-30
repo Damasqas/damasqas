@@ -650,13 +650,14 @@ export class BullMQAdapter implements QueueAdapter {
     );
   }
 
-  async getOverdueDelayedJobs(queue: string, limit = 100): Promise<OverdueDelayedJob[]> {
-    const now = this.adjustedNow();
+  async getOverdueDelayedJobs(queue: string, limit = 20): Promise<OverdueDelayedJob[]> {
+    const overdueUpperBound = this.adjustedNow() - 60_000;
+    if (overdueUpperBound <= 0) return [];
     const key = `${this.prefix}:${queue}:delayed`;
 
     // ZRANGEBYSCORE with WITHSCORES returns [id, score, id, score, ...]
     const raw = await this.cmd.zrangebyscore(
-      key, '0', String(now),
+      key, '0', String(overdueUpperBound),
       'WITHSCORES', 'LIMIT', 0, limit,
     ) as string[];
 
@@ -668,18 +669,17 @@ export class BullMQAdapter implements QueueAdapter {
       entries.push({ id: raw[i]!, score: parseInt(raw[i + 1]!, 10) });
     }
 
-    // Hydrate first 20 jobs via pipelined HMGET
-    const toHydrate = entries.slice(0, 20);
+    // Hydrate jobs via pipelined HMGET
     const pipeline = this.cmd.pipeline();
-    for (const { id } of toHydrate) {
+    for (const { id } of entries) {
       pipeline.hmget(`${this.prefix}:${queue}:${id}`, 'name', 'delay', 'timestamp');
     }
     const results = await pipeline.exec();
 
     const jobs: OverdueDelayedJob[] = [];
     const realNow = Date.now();
-    for (let i = 0; i < toHydrate.length; i++) {
-      const { id, score } = toHydrate[i]!;
+    for (let i = 0; i < entries.length; i++) {
+      const { id, score } = entries[i]!;
       const err = results?.[i]?.[0];
       const fields = results?.[i]?.[1] as (string | null)[] | undefined;
       if (err || !fields) continue;
@@ -699,6 +699,8 @@ export class BullMQAdapter implements QueueAdapter {
   }
 
   async promoteAllOverdue(queue: string, limit = 100): Promise<number> {
+    // No 60s grace period here — when the user explicitly promotes, we promote
+    // everything past its scheduled time, not just what we'd alert on.
     const now = this.adjustedNow();
     const key = `${this.prefix}:${queue}:delayed`;
     const jobIds = await this.cmd.zrangebyscore(key, '0', String(now), 'LIMIT', 0, limit) as string[];
