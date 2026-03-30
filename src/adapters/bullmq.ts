@@ -55,6 +55,20 @@ export class BullMQAdapter implements QueueAdapter {
     return Date.now() - this.clockSkewMs;
   }
 
+  /**
+   * Convert a plain millisecond timestamp to the maximum packed delayed score
+   * for that timestamp. BullMQ v4+ packs delayed scores as:
+   *
+   *   score = timestamp * 0x1000 + counter   (counter is 0..4095)
+   *
+   * To find all jobs scheduled at or before `ts`, the ZRANGEBYSCORE upper
+   * bound must be `(ts + 1) * 0x1000 - 1` — the highest packed score whose
+   * embedded timestamp is <= ts.
+   */
+  private static delayedScoreUpperBound(ts: number): string {
+    return String((ts + 1) * 0x1000 - 1);
+  }
+
   async discoverQueues(): Promise<string[]> {
     const queues: string[] = [];
     let cursor = '0';
@@ -101,7 +115,7 @@ export class BullMQAdapter implements QueueAdapter {
     pipeline.zcard(key('prioritized'));      // 7
     pipeline.llen(key('waiting-children')); // 8
     if (overdueUpperBound > 0) {
-      pipeline.zcount(key('delayed'), '0', String(overdueUpperBound)); // 9
+      pipeline.zcount(key('delayed'), '0', BullMQAdapter.delayedScoreUpperBound(overdueUpperBound)); // 9
     }
 
     const results = await pipeline.exec();
@@ -325,7 +339,7 @@ export class BullMQAdapter implements QueueAdapter {
     if (overdueUpperBound > 0) {
       const p4 = this.cmd.pipeline();
       for (const queue of queues) {
-        p4.zcount(`${this.prefix}:${queue}:delayed`, '0', String(overdueUpperBound));
+        p4.zcount(`${this.prefix}:${queue}:delayed`, '0', BullMQAdapter.delayedScoreUpperBound(overdueUpperBound));
       }
       const r4 = await p4.exec();
       if (r4) {
@@ -645,7 +659,7 @@ export class BullMQAdapter implements QueueAdapter {
     return this.cmd.zcount(
       `${this.prefix}:${queue}:delayed`,
       '0',
-      String(overdueUpperBound),
+      BullMQAdapter.delayedScoreUpperBound(overdueUpperBound),
     );
   }
 
@@ -655,8 +669,9 @@ export class BullMQAdapter implements QueueAdapter {
     const key = `${this.prefix}:${queue}:delayed`;
 
     // ZRANGEBYSCORE with WITHSCORES returns [id, score, id, score, ...]
+    // Scores are packed: timestamp * 0x1000 + counter (BullMQ v4+)
     const raw = await this.cmd.zrangebyscore(
-      key, '0', String(overdueUpperBound),
+      key, '0', BullMQAdapter.delayedScoreUpperBound(overdueUpperBound),
       'WITHSCORES', 'LIMIT', 0, limit,
     ) as string[];
 
@@ -686,7 +701,9 @@ export class BullMQAdapter implements QueueAdapter {
       const fields = results?.[i]?.[1] as (string | null)[] | undefined;
       if (err || !fields) continue;
 
-      const scheduledFor = score; // The sorted set score IS the target timestamp
+      // BullMQ v4+ packs scores as: timestamp * 0x1000 + counter.
+      // Extract the real scheduled timestamp by dividing out the packing factor.
+      const scheduledFor = Math.floor(score / 0x1000);
       jobs.push({
         id,
         name: fields[0] || 'unknown',
@@ -705,7 +722,7 @@ export class BullMQAdapter implements QueueAdapter {
     // everything past its scheduled time, not just what we'd alert on.
     const now = this.adjustedNow();
     const key = `${this.prefix}:${queue}:delayed`;
-    const jobIds = await this.cmd.zrangebyscore(key, '0', String(now), 'LIMIT', 0, limit) as string[];
+    const jobIds = await this.cmd.zrangebyscore(key, '0', BullMQAdapter.delayedScoreUpperBound(now), 'LIMIT', 0, limit) as string[];
 
     if (jobIds.length === 0) return 0;
 
