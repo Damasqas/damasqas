@@ -4,17 +4,19 @@ import type { MetricsStore } from '../store.js';
 export function eventRoutes(store: MetricsStore): Router {
   const router = Router();
 
-  // List events with optional filters
+  // List events with optional filters + pagination
   router.get('/events', (req, res) => {
     try {
       const since = parseInt(req.query.since as string, 10) || (Date.now() - 60 * 60 * 1000);
       const until = parseInt(req.query.until as string, 10) || Date.now();
-      const limit = Math.min(parseInt(req.query.limit as string, 10) || 200, 1000);
+      const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 1000);
+      const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
       const queue = req.query.queue as string | undefined;
       const eventType = req.query.type as string | undefined;
+      const jobName = req.query.job_name as string | undefined;
 
-      const events = store.getAllEvents(since, until, limit, queue, eventType);
-      res.json({ events });
+      const result = store.getEventsPage(since, until, limit, offset, queue, eventType, jobName);
+      res.json({ events: result.events, total: result.total, limit, offset });
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch events' });
     }
@@ -37,16 +39,19 @@ export function eventRoutes(store: MetricsStore): Router {
     }
   });
 
-  // Events for a specific queue
+  // Events for a specific queue with pagination
   router.get('/queues/:name/events', (req, res) => {
     try {
       const queue = req.params.name!;
       const since = parseInt(req.query.since as string, 10) || (Date.now() - 60 * 60 * 1000);
       const until = parseInt(req.query.until as string, 10) || Date.now();
-      const limit = Math.min(parseInt(req.query.limit as string, 10) || 200, 1000);
+      const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 1000);
+      const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
+      const eventType = req.query.type as string | undefined;
+      const jobName = req.query.job_name as string | undefined;
 
-      const events = store.getEvents(queue, since, until, limit);
-      res.json({ events });
+      const result = store.getEventsPage(since, until, limit, offset, queue, eventType, jobName);
+      res.json({ events: result.events, total: result.total, limit, offset });
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch queue events' });
     }

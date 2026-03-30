@@ -15,7 +15,7 @@ import type {
   SlowlogEntry,
 } from './types.js';
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export class MetricsStore {
   private db: Database.Database;
@@ -56,6 +56,9 @@ export class MetricsStore {
     }
     if (currentVersion < 4) {
       this.migrateV4();
+    }
+    if (currentVersion < 5) {
+      this.migrateV5();
     }
 
     if (!row) {
@@ -263,6 +266,24 @@ export class MetricsStore {
         command TEXT NOT NULL,
         is_bullmq INTEGER NOT NULL DEFAULT 0
       );
+    `);
+  }
+
+  /** V5: Stream cursor persistence + hydration index for event stream consumer */
+  private migrateV5(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS stream_cursors (
+        queue TEXT PRIMARY KEY,
+        last_stream_id TEXT NOT NULL
+      );
+    `);
+
+    // Partial index for the hydration query (runs every 5s).
+    // Without this, getUnhydratedEventJobIds does a full scan on events
+    // WHERE queue = ? AND job_name IS NULL, which degrades as the table grows.
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_events_unhydrated
+        ON events(queue, job_id) WHERE job_name IS NULL;
     `);
   }
 
@@ -624,6 +645,118 @@ export class MetricsStore {
     `).all(query, limit) as Record<string, unknown>[];
 
     return rows.map((r) => this.rowToEvent(r));
+  }
+
+  // ── Stream Cursor Methods ─────────────────────────────────────────────
+
+  getStreamCursor(queue: string): string | null {
+    const row = this.db.prepare(
+      'SELECT last_stream_id FROM stream_cursors WHERE queue = ?',
+    ).get(queue) as { last_stream_id: string } | undefined;
+    return row?.last_stream_id ?? null;
+  }
+
+  setStreamCursor(queue: string, streamId: string): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO stream_cursors (queue, last_stream_id) VALUES (?, ?)',
+    ).run(queue, streamId);
+  }
+
+  getAllStreamCursors(): Map<string, string> {
+    const rows = this.db.prepare('SELECT queue, last_stream_id FROM stream_cursors').all() as {
+      queue: string;
+      last_stream_id: string;
+    }[];
+    const map = new Map<string, string>();
+    for (const row of rows) {
+      map.set(row.queue, row.last_stream_id);
+    }
+    return map;
+  }
+
+  // ── Event Hydration Methods ──────────────────────────────────────────
+
+  getUnhydratedEventJobIds(queue: string, limit = 200): string[] {
+    const rows = this.db.prepare(
+      "SELECT DISTINCT job_id FROM events WHERE queue = ? AND job_name IS NULL AND job_id != '' LIMIT ?",
+    ).all(queue, limit) as { job_id: string }[];
+    return rows.map((r) => r.job_id);
+  }
+
+  batchUpdateJobNames(updates: { queue: string; jobId: string; jobName: string }[]): void {
+    if (updates.length === 0) return;
+
+    const selectStmt = this.db.prepare(
+      'SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE queue = ? AND job_id = ? AND job_name IS NULL',
+    );
+    const updateStmt = this.db.prepare(
+      'UPDATE events SET job_name = ? WHERE queue = ? AND job_id = ? AND job_name IS NULL',
+    );
+    const ftsDelete = this.db.prepare(
+      "INSERT INTO events_fts (events_fts, rowid, job_id, job_name, queue, event_type, data) VALUES ('delete', ?, ?, ?, ?, ?, ?)",
+    );
+    const ftsInsert = this.db.prepare(
+      'INSERT INTO events_fts (rowid, job_id, job_name, queue, event_type, data) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+
+    const tx = this.db.transaction(() => {
+      for (const { queue, jobId, jobName } of updates) {
+        // Get affected rows for FTS sync before updating
+        const rows = selectStmt.all(queue, jobId) as Record<string, unknown>[];
+
+        // Update the events
+        updateStmt.run(jobName, queue, jobId);
+
+        // Re-index FTS for affected rows
+        for (const row of rows) {
+          ftsDelete.run(row.id, row.job_id, row.job_name, row.queue, row.event_type, row.data);
+          ftsInsert.run(row.id, row.job_id, jobName, row.queue, row.event_type, row.data);
+        }
+      }
+    });
+    tx();
+  }
+
+  // ── Enhanced Event Query Methods ─────────────────────────────────────
+
+  getEventsPage(
+    since: number,
+    until: number,
+    limit: number,
+    offset: number,
+    queue?: string,
+    eventType?: string,
+    jobName?: string,
+  ): { events: EventRecord[]; total: number } {
+    let whereClauses = 'ts >= ? AND ts <= ?';
+    const params: unknown[] = [since, until];
+
+    if (queue) {
+      whereClauses += ' AND queue = ?';
+      params.push(queue);
+    }
+    if (eventType) {
+      whereClauses += ' AND event_type = ?';
+      params.push(eventType);
+    }
+    if (jobName) {
+      whereClauses += ' AND job_name = ?';
+      params.push(jobName);
+    }
+
+    const countRow = this.db.prepare(
+      `SELECT COUNT(*) as cnt FROM events WHERE ${whereClauses}`,
+    ).get(...params) as { cnt: number };
+    const total = countRow.cnt;
+
+    const rows = this.db.prepare(
+      `SELECT * FROM events WHERE ${whereClauses} ORDER BY ts DESC LIMIT ? OFFSET ?`,
+    ).all(...params, limit, offset) as Record<string, unknown>[];
+
+    return {
+      events: rows.map((r) => this.rowToEvent(r)),
+      total,
+    };
   }
 
   // ── Error Group Methods ──────────────────────────────────────────────
@@ -1001,23 +1134,50 @@ export class MetricsStore {
     this.db.prepare('DELETE FROM metrics WHERE ts < ?').run(cutoff);
     this.db.prepare('DELETE FROM anomalies WHERE ts < ? AND resolved_at IS NOT NULL').run(cutoff);
 
-    // Delete old events and keep FTS in sync (content-external FTS requires manual sync)
-    const deletedEvents = this.db.prepare(
-      'SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ?',
-    ).all(cutoff) as Record<string, unknown>[];
-    if (deletedEvents.length > 0) {
-      const ftsDelete = this.db.prepare(
-        "INSERT INTO events_fts (events_fts, rowid, job_id, job_name, queue, event_type, data) VALUES ('delete', ?, ?, ?, ?, ?, ?)",
-      );
-      const eventDelete = this.db.prepare('DELETE FROM events WHERE id = ?');
-      const deleteTransaction = this.db.transaction(() => {
-        for (const row of deletedEvents) {
-          ftsDelete.run(row.id, row.job_id, row.job_name, row.queue, row.event_type, row.data);
-          eventDelete.run(row.id);
+    // ── Tiered event retention ──────────────────────────────────────────
+    // Last 1 hour: full resolution (all events kept)
+    // 1–24 hours: drop completed, active, added, waiting, progress events
+    // 1–7 days: keep only failed and stalled events
+    // 7+ days / beyond retention: delete everything
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    const ftsDeleteStmt = this.db.prepare(
+      "INSERT INTO events_fts (events_fts, rowid, job_id, job_name, queue, event_type, data) VALUES ('delete', ?, ?, ?, ?, ?, ?)",
+    );
+    const eventDeleteStmt = this.db.prepare('DELETE FROM events WHERE id = ?');
+
+    const deleteEventsWithFts = (rows: Record<string, unknown>[]) => {
+      if (rows.length === 0) return;
+      const tx = this.db.transaction(() => {
+        for (const row of rows) {
+          ftsDeleteStmt.run(row.id, row.job_id, row.job_name, row.queue, row.event_type, row.data);
+          eventDeleteStmt.run(row.id);
         }
       });
-      deleteTransaction();
-    }
+      tx();
+    };
+
+    // 1-24h: keep only failed, stalled, and error events (per spec).
+    // BullMQ emits 'error' for queue-level errors (connection failures,
+    // Lua script errors) — critical for incident debugging.
+    const tier1Events = this.db.prepare(
+      "SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ? AND ts >= ? AND event_type NOT IN ('failed', 'stalled', 'error')",
+    ).all(oneHourAgo, oneDayAgo) as Record<string, unknown>[];
+    deleteEventsWithFts(tier1Events);
+
+    // 1-7d: keep only failed and stalled events
+    const tier2Events = this.db.prepare(
+      "SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ? AND ts >= ? AND event_type NOT IN ('failed', 'stalled')",
+    ).all(oneDayAgo, sevenDaysAgo) as Record<string, unknown>[];
+    deleteEventsWithFts(tier2Events);
+
+    // 7+ days: delete all events (aggregated counts live in snapshots table)
+    const oldEvents = this.db.prepare(
+      'SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ?',
+    ).all(sevenDaysAgo) as Record<string, unknown>[];
+    deleteEventsWithFts(oldEvents);
 
     this.db.prepare('DELETE FROM alert_fires WHERE ts < ?').run(cutoff);
 

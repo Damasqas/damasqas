@@ -156,6 +156,7 @@ async function start(config: DamasqasConfig): Promise<void> {
   // Start event stream consumer on the dedicated stream connection
   const eventStream = new EventStreamConsumer(
     adapter.getStreamConnection(),
+    adapter.getCmdConnection(),
     store,
     discovery,
     config.prefix,
