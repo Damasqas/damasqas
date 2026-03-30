@@ -467,7 +467,7 @@ export class BullMQAdapter implements QueueAdapter {
 
   async retryAllFailed(queue: string): Promise<number> {
     const key = `${this.prefix}:${queue}:failed`;
-    const jobIds = await this.ops.zrange(key, 0, -1);
+    const jobIds = await this.cmd.zrange(key, 0, -1);
     const q = this.getQueue(queue);
 
     let count = 0;

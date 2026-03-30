@@ -657,7 +657,25 @@ export class MetricsStore {
     this.db.prepare('DELETE FROM snapshots WHERE ts < ?').run(cutoff);
     this.db.prepare('DELETE FROM metrics WHERE ts < ?').run(cutoff);
     this.db.prepare('DELETE FROM anomalies WHERE ts < ? AND resolved_at IS NOT NULL').run(cutoff);
-    this.db.prepare('DELETE FROM events WHERE ts < ?').run(cutoff);
+
+    // Delete old events and keep FTS in sync (content-external FTS requires manual sync)
+    const deletedEvents = this.db.prepare(
+      'SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ?',
+    ).all(cutoff) as Record<string, unknown>[];
+    if (deletedEvents.length > 0) {
+      const ftsDelete = this.db.prepare(
+        "INSERT INTO events_fts (events_fts, rowid, job_id, job_name, queue, event_type, data) VALUES ('delete', ?, ?, ?, ?, ?, ?)",
+      );
+      const eventDelete = this.db.prepare('DELETE FROM events WHERE id = ?');
+      const deleteTransaction = this.db.transaction(() => {
+        for (const row of deletedEvents) {
+          ftsDelete.run(row.id, row.job_id, row.job_name, row.queue, row.event_type, row.data);
+          eventDelete.run(row.id);
+        }
+      });
+      deleteTransaction();
+    }
+
     this.db.prepare('DELETE FROM alert_fires WHERE ts < ?').run(cutoff);
   }
 
