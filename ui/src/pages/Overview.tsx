@@ -34,8 +34,13 @@ export function Overview({ onSelectQueue }: OverviewProps) {
   const totalStalled = queues.reduce((sum, q) => sum + q.processors.stalled, 0);
   const totalOverdue = queues.reduce((sum, q) => sum + (q.overdueDelayed || 0), 0);
 
-  // Aggregate comparison data across all queues
+  // Aggregate comparison data across queues that have data in both periods.
+  // Only include queues with yesterday data in both current and yesterday totals
+  // to avoid skewing the comparison (e.g. new queues inflating current totals).
   const comparisons = comparisonData?.comparisons;
+  let matchedCurrentThroughput = 0;
+  let matchedCurrentFailRate = 0;
+  let matchedCurrentWaiting = 0;
   let yesterdayTotalThroughput = 0;
   let yesterdayTotalFailRate = 0;
   let yesterdayTotalWaiting = 0;
@@ -45,6 +50,9 @@ export function Overview({ onSelectQueue }: OverviewProps) {
       const comp = comparisons[queue.name];
       if (comp?.yesterday) {
         hasYesterdayData = true;
+        matchedCurrentThroughput += comp.current.throughput ?? 0;
+        matchedCurrentFailRate += comp.current.failRate ?? 0;
+        matchedCurrentWaiting += comp.current.waiting;
         yesterdayTotalThroughput += comp.yesterday.throughput ?? 0;
         yesterdayTotalFailRate += comp.yesterday.failRate ?? 0;
         yesterdayTotalWaiting += comp.yesterday.waiting;
@@ -53,13 +61,13 @@ export function Overview({ onSelectQueue }: OverviewProps) {
   }
 
   const throughputTrend = hasYesterdayData
-    ? [{ period: 'yesterday', trend: computeTrend(totalThroughput, yesterdayTotalThroughput, false) }]
+    ? [{ period: 'yesterday', trend: computeTrend(matchedCurrentThroughput, yesterdayTotalThroughput, false) }]
     : [];
   const failureTrend = hasYesterdayData
-    ? [{ period: 'yesterday', trend: computeTrend(totalFailures, yesterdayTotalFailRate, true) }]
+    ? [{ period: 'yesterday', trend: computeTrend(matchedCurrentFailRate, yesterdayTotalFailRate, true) }]
     : [];
   const waitingTrend = hasYesterdayData
-    ? [{ period: 'yesterday', trend: computeTrend(totalWaiting, yesterdayTotalWaiting, true) }]
+    ? [{ period: 'yesterday', trend: computeTrend(matchedCurrentWaiting, yesterdayTotalWaiting, true) }]
     : [];
 
   return (

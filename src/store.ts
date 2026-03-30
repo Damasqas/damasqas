@@ -1642,6 +1642,10 @@ export class MetricsStore {
   /**
    * Compare event-based metrics (completed, failed, fail rate, avg process time)
    * for the current hour vs the same hour yesterday and same hour last week.
+   *
+   * Current hour uses the events table (full resolution within 1h retention).
+   * Yesterday and last week use pre-aggregated job_type_summaries since
+   * completed events are pruned after 1 hour by tiered retention.
    */
   getEventComparison(queue: string): {
     current: { completed: number; failed: number; failRate: number | null; avgProcessMs: number | null };
@@ -1652,32 +1656,56 @@ export class MetricsStore {
     const hourStart = now - (now % 3600000);
     const hourEnd = now;
 
-    const queryPeriod = (since: number, until: number) => {
-      const row = this.db.prepare(`
-        SELECT
-          COUNT(*) FILTER (WHERE event_type = 'completed') as completed,
-          COUNT(*) FILTER (WHERE event_type = 'failed') as failed,
-          AVG(CASE WHEN event_type = 'completed' THEN
-            CAST(json_extract(data, '$.processedOn') AS REAL) - CAST(json_extract(data, '$.timestamp') AS REAL)
-          END) as avg_process_ms
-        FROM events
-        WHERE queue = ? AND ts BETWEEN ? AND ? AND event_type IN ('completed', 'failed')
-      `).get(queue, since, until) as { completed: number; failed: number; avg_process_ms: number | null } | undefined;
+    // Current hour: use events table (within 1h retention window)
+    const currentRow = this.db.prepare(`
+      SELECT
+        COUNT(*) FILTER (WHERE event_type = 'completed') as completed,
+        COUNT(*) FILTER (WHERE event_type = 'failed') as failed
+      FROM events
+      WHERE queue = ? AND ts BETWEEN ? AND ? AND event_type IN ('completed', 'failed')
+    `).get(queue, hourStart, hourEnd) as { completed: number; failed: number } | undefined;
 
-      if (!row || (row.completed === 0 && row.failed === 0)) return null;
+    // Current hour timing from job_timings (also within retention)
+    const currentTimingRow = this.db.prepare(`
+      SELECT AVG(process_ms) as avg_process_ms
+      FROM job_timings
+      WHERE queue = ? AND ts BETWEEN ? AND ? AND wait_ms >= 0
+    `).get(queue, hourStart, hourEnd) as { avg_process_ms: number | null } | undefined;
 
-      const total = row.completed + row.failed;
+    const buildResult = (completed: number, failed: number, avgProcessMs: number | null) => {
+      const total = completed + failed;
+      if (total === 0) return null;
       return {
-        completed: row.completed,
-        failed: row.failed,
-        failRate: total > 0 ? Math.round(row.failed * 1000 / total) / 10 : null,
-        avgProcessMs: row.avg_process_ms ? Math.round(row.avg_process_ms) : null,
+        completed,
+        failed,
+        failRate: total > 0 ? Math.round(failed * 1000 / total) / 10 : null,
+        avgProcessMs: avgProcessMs ? Math.round(avgProcessMs) : null,
       };
     };
 
-    const current = queryPeriod(hourStart, hourEnd) ?? { completed: 0, failed: 0, failRate: null, avgProcessMs: null };
-    const yesterday = queryPeriod(hourStart - 86400000, hourEnd - 86400000);
-    const lastWeek = queryPeriod(hourStart - 7 * 86400000, hourEnd - 7 * 86400000);
+    const current = buildResult(
+      currentRow?.completed ?? 0,
+      currentRow?.failed ?? 0,
+      currentTimingRow?.avg_process_ms ?? null,
+    ) ?? { completed: 0, failed: 0, failRate: null, avgProcessMs: null };
+
+    // Yesterday & last week: use job_type_summaries (survives event pruning)
+    const querySummaryPeriod = (since: number, until: number) => {
+      const row = this.db.prepare(`
+        SELECT
+          SUM(completed) as completed,
+          SUM(failed) as failed,
+          SUM(COALESCE(avg_process_ms, 0) * completed) / NULLIF(SUM(CASE WHEN avg_process_ms IS NOT NULL THEN completed ELSE 0 END), 0) as avg_process_ms
+        FROM job_type_summaries
+        WHERE queue = ? AND minute_ts BETWEEN ? AND ?
+      `).get(queue, since, until) as { completed: number | null; failed: number | null; avg_process_ms: number | null } | undefined;
+
+      if (!row || ((row.completed ?? 0) === 0 && (row.failed ?? 0) === 0)) return null;
+      return buildResult(row.completed ?? 0, row.failed ?? 0, row.avg_process_ms);
+    };
+
+    const yesterday = querySummaryPeriod(hourStart - 86400000, hourEnd - 86400000);
+    const lastWeek = querySummaryPeriod(hourStart - 7 * 86400000, hourEnd - 7 * 86400000);
 
     return { current, yesterday, lastWeek };
   }
