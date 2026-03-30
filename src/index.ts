@@ -134,41 +134,44 @@ async function start(config: DamasqasConfig): Promise<void> {
   eventStream.start();
   console.log('[damasqas] Event stream consumer started');
 
-  // Anomaly alert dispatch loop (for legacy anomaly-based alerts)
+  // Anomaly alert dispatch loop (for legacy anomaly-based alerts).
+  // NOTE: Anomaly *detection* runs inside the collector tick. This loop
+  // only handles alert *dispatch* for unsent anomalies — it does NOT
+  // re-run detection, which would create duplicate anomaly rows.
   const anomalyAlertInterval = setInterval(async () => {
+    if (alertChannels.length === 0) return;
+
     try {
-      const currentQueues = discovery.getQueues();
-      const anomalies = await anomalyDetector.detect(currentQueues);
+      const unsentAnomalies = store.getActiveAnomalies()
+        .filter((a) => !a.alertSent);
 
-      for (const anomaly of anomalies) {
-        if (!anomaly.alertSent && alertChannels.length > 0) {
-          const snapshot = store.getLatestSnapshot(anomaly.queue);
-          if (snapshot) {
-            const metrics = store.getLatestMetrics(anomaly.queue);
-            const topErrors = await adapter.getErrorGroups(
-              anomaly.queue,
-              Date.now() - 5 * 60 * 1000,
-              10,
-            );
-            const payload: AlertPayload = {
-              queue: anomaly.queue,
-              anomaly,
-              snapshot,
-              metrics,
-              topErrors,
-            };
+      for (const anomaly of unsentAnomalies) {
+        const snapshot = store.getLatestSnapshot(anomaly.queue);
+        if (!snapshot) continue;
 
-            for (const channel of alertChannels) {
-              try {
-                await channel.send(payload);
-              } catch (err) {
-                console.error('[damasqas] Alert send failed:', err);
-              }
-            }
+        const metrics = store.getLatestMetrics(anomaly.queue);
+        const topErrors = await adapter.getErrorGroups(
+          anomaly.queue,
+          Date.now() - 5 * 60 * 1000,
+          10,
+        );
+        const payload: AlertPayload = {
+          queue: anomaly.queue,
+          anomaly,
+          snapshot,
+          metrics,
+          topErrors,
+        };
 
-            if (anomaly.id) store.markAlertSent(anomaly.id);
+        for (const channel of alertChannels) {
+          try {
+            await channel.send(payload);
+          } catch (err) {
+            console.error('[damasqas] Alert send failed:', err);
           }
         }
+
+        if (anomaly.id) store.markAlertSent(anomaly.id);
 
         // Cloud integration
         await sendCloudEvent(config, anomaly);

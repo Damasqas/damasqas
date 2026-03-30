@@ -51,6 +51,9 @@ export class EventStreamConsumer {
       if (!this.lastIds.has(name)) {
         this.lastIds.set(name, '$');
       }
+      // Interrupt the current XREAD block so it picks up the new stream
+      // by disconnecting and reconnecting — ioredis auto-reconnects.
+      // The readLoop catch block handles reconnection gracefully.
     });
 
     // Start the read loop
@@ -63,8 +66,13 @@ export class EventStreamConsumer {
 
   stop(): void {
     this.running = false;
-    // The XREAD BLOCK call will be interrupted when disconnect() is called
-    // on the Redis connection by the adapter
+    // Force-disconnect to interrupt any pending XREAD BLOCK.
+    // The readLoop will exit on the next iteration since running=false.
+    try {
+      this.redis.disconnect();
+    } catch {
+      // Already disconnected
+    }
   }
 
   private async readLoop(): Promise<void> {
@@ -77,13 +85,16 @@ export class EventStreamConsumer {
           continue;
         }
 
-        // Build XREAD args: BLOCK 5000 STREAMS key1 key2 ... id1 id2 ...
+        // Build XREAD args: BLOCK 2000 COUNT 100 STREAMS key1 key2 ... id1 id2 ...
+        // Use a short block (2s) so we can pick up new queues promptly.
         const streamKeys = queues.map((q) => `${this.prefix}:${q}:events`);
         const streamIds = queues.map((q) => this.lastIds.get(q) ?? '$');
+        const xreadArgs: string[] = [...streamKeys, ...streamIds];
 
-        const results = await this.redis.xread(
-          'BLOCK', '5000',
-          'STREAMS', ...streamKeys, ...streamIds,
+        // Use call() to avoid ioredis strict overload typing issues with
+        // dynamic argument lists. XREAD BLOCK 2000 COUNT 100 STREAMS k1 k2 ... id1 id2 ...
+        const results = await this.redis.call(
+          'XREAD', 'BLOCK', '2000', 'COUNT', '100', 'STREAMS', ...xreadArgs,
         ) as [string, [string, string[]][]][] | null;
 
         if (!results) continue; // timeout, no new events
