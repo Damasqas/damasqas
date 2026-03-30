@@ -1,8 +1,21 @@
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Legend,
+} from 'recharts';
 import type { QueueState } from '../hooks/useQueues';
+import type { Metric } from '../hooks/useMetrics';
 
 interface CapacityPanelProps {
   queue: QueueState;
-  snapshots: Array<{ timestamp: number; waiting: number }>;
+  metrics: Metric[];
+  range?: '1h' | '6h' | '24h' | '7d';
+  domain?: [number, number];
 }
 
 const trendArrows: Record<string, { symbol: string; color: string; label: string }> = {
@@ -23,7 +36,24 @@ function formatDuration(minutes: number): string {
   return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
 }
 
-export function CapacityPanel({ queue }: CapacityPanelProps) {
+function formatTick(ts: number, range?: string): string {
+  const d = new Date(ts);
+  switch (range) {
+    case '7d':
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    case '24h':
+      return d.toLocaleTimeString('en-US', { hour: 'numeric' });
+    default:
+      return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+}
+
+function formatTooltipLabel(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelProps) {
   const drain = queue.drain;
 
   if (!drain) {
@@ -53,6 +83,15 @@ export function CapacityPanel({ queue }: CapacityPanelProps) {
 
   const trend = trendArrows[drain.trend] || trendArrows.stable!;
 
+  // Derive inflow/drain time-series from existing metrics:
+  // drainRate = throughput + failureRate (both completed and failed drain the wait queue)
+  // inflowRate = drainRate + backlogGrowthRate (backlog change = inflow - drain)
+  const chartData = metrics.map((m) => ({
+    time: m.timestamp,
+    drainRate: m.throughput + m.failureRate,
+    inflowRate: Math.max(0, m.throughput + m.failureRate + m.backlogGrowthRate),
+  }));
+
   return (
     <div style={{
       background: 'rgba(255, 255, 255, 0.02)',
@@ -75,6 +114,7 @@ export function CapacityPanel({ queue }: CapacityPanelProps) {
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
         gap: 16,
+        marginBottom: chartData.length > 1 ? 20 : 0,
       }}>
         {/* Current Depth + Trend */}
         <div style={{
@@ -188,6 +228,65 @@ export function CapacityPanel({ queue }: CapacityPanelProps) {
           )}
         </div>
       </div>
+
+      {/* Inflow vs Drain Rate Chart */}
+      {chartData.length > 1 && (
+        <div style={{
+          background: 'rgba(255, 255, 255, 0.03)',
+          borderRadius: 8,
+          padding: 16,
+        }}>
+          <div style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>
+            Inflow vs Drain Rate
+          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <XAxis
+                dataKey="time"
+                type="number"
+                scale="time"
+                domain={domain ?? ['dataMin', 'dataMax']}
+                tick={{ fill: '#555', fontSize: 10 }}
+                axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
+                tickFormatter={(ts: number) => formatTick(ts, range)}
+              />
+              <YAxis
+                tick={{ fill: '#555', fontSize: 10 }}
+                axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
+              />
+              <Tooltip
+                contentStyle={{
+                  background: '#1a1a1a',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 8,
+                  fontSize: 12,
+                }}
+                labelFormatter={formatTooltipLabel}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: 11, color: '#888' }}
+              />
+              <Line
+                type="monotone"
+                dataKey="inflowRate"
+                name="Inflow"
+                stroke="#f59e0b"
+                strokeWidth={2}
+                dot={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="drainRate"
+                name="Drain"
+                stroke="#22c55e"
+                strokeWidth={2}
+                dot={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }

@@ -133,7 +133,7 @@ export function QueueDetail({ queue }: QueueDetailProps) {
         <StatCard label="Overdue Delayed" value={q.overdueDelayed || 0} critical={(q.overdueDelayed || 0) > 0} />
       </div>
 
-      <CapacityPanel queue={q} snapshots={snapshots} />
+      <CapacityPanel queue={q} metrics={metrics} range={range} domain={[since, until]} />
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         {(['1h', '6h', '24h', '7d'] as const).map((r) => (

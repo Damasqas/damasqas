@@ -91,21 +91,7 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
                 {q.counts.waiting.toLocaleString()}
               </td>
               <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
-                {q.drain ? (() => {
-                  const t = trendConfig[q.drain.trend] || trendConfig.stable!;
-                  const tooltip = q.drain.projectedDrainMinutes !== null
-                    ? `Clears in ~${Math.round(q.drain.projectedDrainMinutes)}m`
-                    : q.drain.capacityDeficit > 0
-                      ? `Need ${q.drain.capacityDeficit}% more capacity`
-                      : t.label;
-                  return (
-                    <span title={tooltip} style={{ color: t.color, fontWeight: 600 }}>
-                      {t.symbol}
-                    </span>
-                  );
-                })() : (
-                  <span style={{ color: '#666' }}>{'\u2014'}</span>
-                )}
+                <TrendCell drain={q.drain} />
               </td>
               <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
                 {q.counts.active}
@@ -139,5 +125,24 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
         </div>
       )}
     </div>
+  );
+}
+
+function TrendCell({ drain }: { drain: QueueState['drain'] }) {
+  if (!drain) {
+    return <span style={{ color: '#666' }}>{'\u2014'}</span>;
+  }
+
+  const t = trendConfig[drain.trend] || trendConfig.stable!;
+  const tooltip = drain.projectedDrainMinutes !== null
+    ? `Clears in ~${Math.round(drain.projectedDrainMinutes)}m`
+    : drain.capacityDeficit > 0
+      ? `Need ${drain.capacityDeficit}% more capacity`
+      : t.label;
+
+  return (
+    <span title={tooltip} style={{ color: t.color, fontWeight: 600 }}>
+      {t.symbol}
+    </span>
   );
 }
