@@ -241,10 +241,14 @@ export class EventStreamConsumer {
   }
 
   /**
-   * Batch-hydrate job names for events with NULL job_name.
+   * Batch-hydrate job names and payloads for events with NULL job_name.
    * Collects unhydrated job IDs across ALL queues, then issues a single
-   * pipelined HGET batch to Redis. This is O(1) round-trips regardless
-   * of queue count.
+   * pipelined HMGET batch to Redis for both name and data fields.
+   * This is O(1) round-trips regardless of queue count.
+   *
+   * Job payloads are truncated to 500 characters and stored in the event's
+   * data field to enable full-text search by order ID, customer reference,
+   * or any other content in the job payload.
    */
   private async hydrateJobNames(): Promise<void> {
     const queues = this.discovery.getQueues();
@@ -260,20 +264,37 @@ export class EventStreamConsumer {
 
     if (work.length === 0) return;
 
-    // Single pipeline for all HGET calls across all queues
+    // Single pipeline for all HMGET calls across all queues
+    // Fetch both 'name' and 'data' (job payload) in one round-trip
     const pipeline = this.cmdRedis.pipeline();
     for (const { queue, jobId } of work) {
-      pipeline.hget(`${this.prefix}:${queue}:${jobId}`, 'name');
+      pipeline.hmget(`${this.prefix}:${queue}:${jobId}`, 'name', 'data');
     }
 
     const results = await pipeline.exec();
     if (!results) return;
 
-    const updates: { queue: string; jobId: string; jobName: string }[] = [];
+    const updates: { queue: string; jobId: string; jobName: string; jobData: string | null }[] = [];
     for (let i = 0; i < work.length; i++) {
-      const [err, name] = results[i]!;
-      const resolvedName = err ? '[error]' : ((name as string) || '[deleted]');
-      updates.push({ queue: work[i]!.queue, jobId: work[i]!.jobId, jobName: resolvedName });
+      const [err, fields] = results[i]!;
+      if (err) {
+        updates.push({ queue: work[i]!.queue, jobId: work[i]!.jobId, jobName: '[error]', jobData: null });
+        continue;
+      }
+
+      const [name, data] = (fields as (string | null)[]) ?? [null, null];
+      const resolvedName = name || '[deleted]';
+
+      // Truncate payload to 500 chars for FTS indexing — catches most
+      // search cases (order IDs, customer refs) without inflating storage.
+      const searchableData = data ? data.substring(0, 500) : null;
+
+      updates.push({
+        queue: work[i]!.queue,
+        jobId: work[i]!.jobId,
+        jobName: resolvedName,
+        jobData: searchableData,
+      });
     }
 
     this.store.batchUpdateJobNames(updates);

@@ -22,22 +22,9 @@ export function eventRoutes(store: MetricsStore): Router {
     }
   });
 
-  // Full-text search events
-  router.get('/events/search', (req, res) => {
-    try {
-      const query = req.query.q as string;
-      if (!query) {
-        res.status(400).json({ error: 'Query parameter q is required' });
-        return;
-      }
-
-      const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, 500);
-      const events = store.searchEvents(query, limit);
-      res.json({ events });
-    } catch (err) {
-      res.status(500).json({ error: 'Failed to search events' });
-    }
-  });
+  // Full-text search events (also mounted at /api/search for convenience)
+  router.get('/events/search', handleSearch(store));
+  router.get('/search', handleSearch(store));
 
   // Events for a specific queue with pagination
   router.get('/queues/:name/events', (req, res) => {
@@ -58,4 +45,28 @@ export function eventRoutes(store: MetricsStore): Router {
   });
 
   return router;
+}
+
+function handleSearch(store: MetricsStore) {
+  return (req: import('express').Request, res: import('express').Response) => {
+    try {
+      const query = req.query.q as string;
+      if (!query) {
+        res.status(400).json({ error: 'Query parameter q is required' });
+        return;
+      }
+
+      const limit = Math.min(parseInt(req.query.limit as string, 10) || 50, 500);
+      const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
+      const queue = req.query.queue as string | undefined;
+      const eventType = req.query.type as string | undefined;
+      const from = req.query.from ? Number(req.query.from) : undefined;
+      const to = req.query.to ? Number(req.query.to) : undefined;
+
+      const result = store.searchEvents(query, limit, offset, queue, eventType, from, to);
+      res.json({ events: result.events, total: result.total, limit, offset });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to search events' });
+    }
+  };
 }
