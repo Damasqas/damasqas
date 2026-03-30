@@ -14,6 +14,8 @@ import { jobRoutes } from './routes/jobs.js';
 import { anomalyRoutes } from './routes/anomalies.js';
 import { operationRoutes } from './routes/operations.js';
 import { redisRoutes } from './routes/redis.js';
+import { alertRoutes } from './routes/alerts.js';
+import { eventRoutes } from './routes/events.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -22,7 +24,6 @@ export function createServer(
   store: MetricsStore,
   adapter: QueueAdapter,
   ops: Operations,
-  redisUrl: string,
   startTime: number,
   noDashboard: boolean,
 ) {
@@ -38,7 +39,9 @@ export function createServer(
   app.use('/api', jobRoutes(adapter));
   app.use('/api', anomalyRoutes(store));
   app.use('/api', operationRoutes(ops, adapter));
-  app.use('/api', redisRoutes(redisUrl));
+  app.use('/api', redisRoutes(adapter));
+  app.use('/api', alertRoutes(store));
+  app.use('/api', eventRoutes(store));
 
   // Serve static dashboard UI
   // Published package: __dirname = dist/, UI at dist/ui/ → join(__dirname, 'ui')

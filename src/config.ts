@@ -7,7 +7,7 @@ const DEFAULTS: DamasqasConfig = {
   redis: 'redis://localhost:6379',
   port: 3888,
   prefix: 'bull',
-  pollInterval: 10,
+  pollInterval: 15,
   discoveryInterval: 60,
   retentionDays: 30,
   slackWebhook: null,

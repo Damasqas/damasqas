@@ -1,59 +1,122 @@
 import type { QueueAdapter } from './adapters/types.js';
 import type { MetricsStore } from './store.js';
+import type { Discovery } from './discovery.js';
+import type { AnomalyDetector } from './anomaly.js';
+import type { AlertEngine } from './alert-engine.js';
 import type { QueueSnapshot, QueueMetrics } from './types.js';
 
 export class Collector {
   private adapter: QueueAdapter;
   private store: MetricsStore;
+  private discovery: Discovery;
+  private anomalyDetector: AnomalyDetector;
+  private alertEngine: AlertEngine | null;
   private pollInterval: number;
   private timer: ReturnType<typeof setInterval> | null = null;
   private previousSnapshots = new Map<string, QueueSnapshot>();
   private verbose: boolean;
+  private tickCount = 0;
+  private discoveryEveryNTicks: number;
 
   constructor(
     adapter: QueueAdapter,
     store: MetricsStore,
+    discovery: Discovery,
+    anomalyDetector: AnomalyDetector,
+    alertEngine: AlertEngine | null,
     pollIntervalSeconds: number,
+    discoveryIntervalSeconds: number,
     verbose = false,
   ) {
     this.adapter = adapter;
     this.store = store;
+    this.discovery = discovery;
+    this.anomalyDetector = anomalyDetector;
+    this.alertEngine = alertEngine;
     this.pollInterval = pollIntervalSeconds * 1000;
     this.verbose = verbose;
+    // Run discovery every Nth tick (default: every 4th tick at 15s = 60s)
+    this.discoveryEveryNTicks = Math.max(1, Math.round(discoveryIntervalSeconds / pollIntervalSeconds));
+  }
+
+  async tick(): Promise<void> {
+    this.tickCount++;
+
+    try {
+      // 1. Queue discovery refresh (every Nth tick)
+      if (this.tickCount % this.discoveryEveryNTicks === 0) {
+        await this.discovery.scan();
+        if (this.verbose) {
+          console.log(`[collector] Discovery refresh: ${this.discovery.getQueues().length} queues`);
+        }
+      }
+
+      const queues = this.discovery.getQueues();
+      if (queues.length === 0) return;
+
+      // 2. Batch all per-queue reads into a single pipeline
+      const snapshots = await this.adapter.getSnapshotBatch(queues);
+
+      // 3. Compute inline metrics and persist
+      for (const snapshot of snapshots) {
+        // Compute throughput/fail rate from previous snapshot
+        const prev = this.previousSnapshots.get(snapshot.queue);
+        if (prev) {
+          const metrics = this.computeMetrics(snapshot, prev);
+          snapshot.throughput1m = metrics.throughput;
+          snapshot.failRate1m = metrics.failureRate;
+          this.store.insertMetrics(metrics);
+        }
+
+        this.store.insertSnapshot(snapshot);
+        this.previousSnapshots.set(snapshot.queue, snapshot);
+
+        if (this.verbose) {
+          console.log(
+            `[collector] ${snapshot.queue}: w=${snapshot.waiting} a=${snapshot.active} ` +
+            `c=${snapshot.completed} f=${snapshot.failed} d=${snapshot.delayed} ` +
+            `p=${snapshot.prioritized} wc=${snapshot.waitingChildren}`,
+          );
+        }
+      }
+
+      // 4. Run anomaly detection
+      try {
+        await this.anomalyDetector.detect(queues);
+      } catch (err) {
+        console.error('[collector] Anomaly detection error:', err);
+      }
+
+      // 5. Evaluate alert rules
+      if (this.alertEngine) {
+        try {
+          await this.alertEngine.evaluate(queues, snapshots);
+        } catch (err) {
+          console.error('[collector] Alert evaluation error:', err);
+        }
+      }
+    } catch (err) {
+      console.error('[collector] Tick failed:', err);
+    }
   }
 
   async collectAll(queues: string[]): Promise<void> {
-    const results = await Promise.allSettled(
-      queues.map((q) => this.collectQueue(q)),
-    );
+    if (queues.length === 0) return;
 
-    for (let i = 0; i < results.length; i++) {
-      const result = results[i]!;
-      if (result.status === 'rejected') {
-        console.error(`[collector] Failed to collect ${queues[i]}:`, result.reason);
+    const snapshots = await this.adapter.getSnapshotBatch(queues);
+
+    for (const snapshot of snapshots) {
+      const prev = this.previousSnapshots.get(snapshot.queue);
+      if (prev) {
+        const metrics = this.computeMetrics(snapshot, prev);
+        snapshot.throughput1m = metrics.throughput;
+        snapshot.failRate1m = metrics.failureRate;
+        this.store.insertMetrics(metrics);
       }
+
+      this.store.insertSnapshot(snapshot);
+      this.previousSnapshots.set(snapshot.queue, snapshot);
     }
-  }
-
-  private async collectQueue(queue: string): Promise<void> {
-    const snapshot = await this.adapter.getSnapshot(queue);
-    this.store.insertSnapshot(snapshot);
-
-    const prev = this.previousSnapshots.get(queue);
-    if (prev) {
-      const metrics = this.computeMetrics(snapshot, prev);
-      this.store.insertMetrics(metrics);
-
-      if (this.verbose) {
-        console.log(
-          `[collector] ${queue}: throughput=${metrics.throughput.toFixed(1)}/min ` +
-          `failures=${metrics.failureRate.toFixed(1)}/min ` +
-          `waiting=${snapshot.waiting} active=${snapshot.active} stalled=${snapshot.stalledCount}`,
-        );
-      }
-    }
-
-    this.previousSnapshots.set(queue, snapshot);
   }
 
   private computeMetrics(current: QueueSnapshot, prev: QueueSnapshot): QueueMetrics {
@@ -88,7 +151,7 @@ export class Collector {
       throughput,
       failureRate,
       failureRatio,
-      avgProcessingMs: null, // Will be filled by sampling
+      avgProcessingMs: null,
       backlogGrowthRate,
     };
   }
@@ -99,13 +162,9 @@ export class Collector {
         const times = await this.adapter.getRecentProcessingTimes(queue, 20);
         if (times.length > 0) {
           const avg = times.reduce((a, b) => a + b, 0) / times.length;
-          // Update the latest metrics row
           const latest = this.store.getLatestMetrics(queue);
           if (latest) {
             latest.avgProcessingMs = avg;
-            // Re-insert as a corrected metrics entry is not ideal;
-            // instead, we'll just log it. The anomaly detector queries
-            // processing times directly from the adapter.
           }
         }
       } catch {
@@ -114,10 +173,9 @@ export class Collector {
     }
   }
 
-  start(getQueues: () => string[]): void {
+  start(): void {
     this.timer = setInterval(async () => {
-      const queues = getQueues();
-      await this.collectAll(queues);
+      await this.tick();
     }, this.pollInterval);
   }
 

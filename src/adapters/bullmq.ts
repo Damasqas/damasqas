@@ -9,13 +9,26 @@ import type {
 } from '../types.js';
 
 export class BullMQAdapter implements QueueAdapter {
-  private redis: Redis;
+  private cmd: Redis;      // reads: SCAN, LLEN, ZCARD, HGETALL, pipelines
+  private stream: Redis;   // dedicated XREAD blocking consumer
+  private ops: Redis;      // mutations: pause, resume, retry, clean
   private prefix: string;
   private queueInstances = new Map<string, Queue>();
 
   constructor(redisUrl: string, prefix = 'bull') {
-    this.redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
+    const connOpts = { maxRetriesPerRequest: null };
+    this.cmd = new Redis(redisUrl, connOpts);
+    this.stream = new Redis(redisUrl, connOpts);
+    this.ops = new Redis(redisUrl, connOpts);
     this.prefix = prefix;
+  }
+
+  getStreamConnection(): Redis {
+    return this.stream;
+  }
+
+  getCmdConnection(): Redis {
+    return this.cmd;
   }
 
   async discoverQueues(): Promise<string[]> {
@@ -23,14 +36,18 @@ export class BullMQAdapter implements QueueAdapter {
     let cursor = '0';
 
     do {
-      const [nextCursor, keys] = await this.redis.scan(
+      const results = await this.cmd.call(
+        'SCAN',
         cursor,
         'MATCH',
         `${this.prefix}:*:meta`,
+        'TYPE',
+        'hash',
         'COUNT',
-        100,
-      );
-      cursor = nextCursor;
+        '200',
+      ) as [string, string[]];
+      cursor = results[0];
+      const keys = results[1];
 
       for (const key of keys) {
         // Extract queue name from {prefix}:{name}:meta
@@ -48,14 +65,16 @@ export class BullMQAdapter implements QueueAdapter {
     const key = (suffix: string) => `${this.prefix}:${queue}:${suffix}`;
     const now = Date.now();
 
-    const pipeline = this.redis.pipeline();
-    pipeline.llen(key('waiting'));        // 0
-    pipeline.llen(key('active'));         // 1
-    pipeline.zcard(key('completed'));     // 2
-    pipeline.zcard(key('failed'));        // 3
-    pipeline.zcard(key('delayed'));       // 4
-    pipeline.hget(key('meta'), 'paused');  // 5
-    pipeline.lindex(key('waiting'), -1);  // 6: oldest waiting job ID
+    const pipeline = this.cmd.pipeline();
+    pipeline.llen(key('waiting'));           // 0
+    pipeline.llen(key('active'));            // 1
+    pipeline.zcard(key('completed'));        // 2
+    pipeline.zcard(key('failed'));           // 3
+    pipeline.zcard(key('delayed'));          // 4
+    pipeline.hget(key('meta'), 'paused');    // 5
+    pipeline.lindex(key('waiting'), -1);     // 6: oldest waiting job ID
+    pipeline.zcard(key('prioritized'));      // 7
+    pipeline.llen(key('waiting-children')); // 8
 
     const results = await pipeline.exec();
     if (!results) throw new Error(`Failed to get snapshot for queue ${queue}`);
@@ -67,11 +86,13 @@ export class BullMQAdapter implements QueueAdapter {
     const delayed = (results[4]![1] as number) || 0;
     const paused = results[5]![1] === '1';
     const oldestWaitingId = results[6]![1] as string | null;
+    const prioritized = (results[7]![1] as number) || 0;
+    const waitingChildren = (results[8]![1] as number) || 0;
 
     // Get oldest waiting age
     let oldestWaitingAge: number | null = null;
     if (oldestWaitingId) {
-      const ts = await this.redis.hget(key(oldestWaitingId), 'timestamp');
+      const ts = await this.cmd.hget(key(oldestWaitingId), 'timestamp');
       if (ts) {
         oldestWaitingAge = now - parseInt(ts, 10);
       }
@@ -79,14 +100,14 @@ export class BullMQAdapter implements QueueAdapter {
 
     // Count locks and detect stalls
     const activeIds = active > 0
-      ? await this.redis.lrange(key('active'), 0, -1)
+      ? await this.cmd.lrange(key('active'), 0, -1)
       : [];
 
     let locks = 0;
     let stalledCount = 0;
 
     if (activeIds.length > 0) {
-      const lockPipeline = this.redis.pipeline();
+      const lockPipeline = this.cmd.pipeline();
       for (const id of activeIds) {
         lockPipeline.exists(key(`${id}:lock`));
       }
@@ -110,20 +131,100 @@ export class BullMQAdapter implements QueueAdapter {
       completed,
       failed,
       delayed,
+      prioritized,
+      waitingChildren: waitingChildren,
       locks,
       stalledCount,
       oldestWaitingAge,
       paused,
+      throughput1m: null,
+      failRate1m: null,
+      avgProcessMs: null,
+      avgWaitMs: null,
     };
+  }
+
+  async getSnapshotBatch(queues: string[]): Promise<QueueSnapshot[]> {
+    if (queues.length === 0) return [];
+
+    const now = Date.now();
+    const pipeline = this.cmd.pipeline();
+    const CMDS_PER_QUEUE = 9;
+
+    // Build pipeline: 9 commands per queue
+    for (const queue of queues) {
+      const key = (suffix: string) => `${this.prefix}:${queue}:${suffix}`;
+      pipeline.llen(key('waiting'));           // 0
+      pipeline.llen(key('active'));            // 1
+      pipeline.zcard(key('completed'));        // 2
+      pipeline.zcard(key('failed'));           // 3
+      pipeline.zcard(key('delayed'));          // 4
+      pipeline.hget(key('meta'), 'paused');    // 5
+      pipeline.lindex(key('waiting'), -1);     // 6
+      pipeline.zcard(key('prioritized'));      // 7
+      pipeline.llen(key('waiting-children')); // 8
+    }
+
+    const results = await pipeline.exec();
+    if (!results) throw new Error('Batch snapshot pipeline failed');
+
+    const snapshots: QueueSnapshot[] = [];
+
+    for (let q = 0; q < queues.length; q++) {
+      const offset = q * CMDS_PER_QUEUE;
+      const queue = queues[q]!;
+
+      const waiting = (results[offset]![1] as number) || 0;
+      const active = (results[offset + 1]![1] as number) || 0;
+      const completed = (results[offset + 2]![1] as number) || 0;
+      const failed = (results[offset + 3]![1] as number) || 0;
+      const delayed = (results[offset + 4]![1] as number) || 0;
+      const paused = results[offset + 5]![1] === '1';
+      const oldestWaitingId = results[offset + 6]![1] as string | null;
+      const prioritized = (results[offset + 7]![1] as number) || 0;
+      const waitingChildren = (results[offset + 8]![1] as number) || 0;
+
+      // Oldest waiting age requires a second lookup — batch these too
+      let oldestWaitingAge: number | null = null;
+      if (oldestWaitingId) {
+        const key = `${this.prefix}:${queue}:${oldestWaitingId}`;
+        const ts = await this.cmd.hget(key, 'timestamp');
+        if (ts) {
+          oldestWaitingAge = now - parseInt(ts, 10);
+        }
+      }
+
+      snapshots.push({
+        queue,
+        timestamp: now,
+        waiting,
+        active,
+        completed,
+        failed,
+        delayed,
+        prioritized,
+        waitingChildren,
+        locks: 0,       // lock detection done separately if needed
+        stalledCount: 0, // stall detection done separately if needed
+        oldestWaitingAge,
+        paused,
+        throughput1m: null,
+        failRate1m: null,
+        avgProcessMs: null,
+        avgWaitMs: null,
+      });
+    }
+
+    return snapshots;
   }
 
   async getStalledJobs(queue: string): Promise<string[]> {
     const key = (suffix: string) => `${this.prefix}:${queue}:${suffix}`;
-    const activeIds = await this.redis.lrange(key('active'), 0, -1);
+    const activeIds = await this.cmd.lrange(key('active'), 0, -1);
 
     if (activeIds.length === 0) return [];
 
-    const pipeline = this.redis.pipeline();
+    const pipeline = this.cmd.pipeline();
     for (const id of activeIds) {
       pipeline.exists(key(`${id}:lock`));
     }
@@ -135,11 +236,11 @@ export class BullMQAdapter implements QueueAdapter {
 
   async getActiveLocks(queue: string): Promise<string[]> {
     const key = (suffix: string) => `${this.prefix}:${queue}:${suffix}`;
-    const activeIds = await this.redis.lrange(key('active'), 0, -1);
+    const activeIds = await this.cmd.lrange(key('active'), 0, -1);
 
     if (activeIds.length === 0) return [];
 
-    const pipeline = this.redis.pipeline();
+    const pipeline = this.cmd.pipeline();
     for (const id of activeIds) {
       pipeline.exists(key(`${id}:lock`));
     }
@@ -155,7 +256,7 @@ export class BullMQAdapter implements QueueAdapter {
     limit: number,
   ): Promise<FailedJob[]> {
     const key = `${this.prefix}:${queue}:failed`;
-    const jobIds = await this.redis.zrevrangebyscore(
+    const jobIds = await this.cmd.zrevrangebyscore(
       key,
       '+inf',
       String(since),
@@ -166,7 +267,7 @@ export class BullMQAdapter implements QueueAdapter {
 
     if (jobIds.length === 0) return [];
 
-    const pipeline = this.redis.pipeline();
+    const pipeline = this.cmd.pipeline();
     for (const id of jobIds) {
       pipeline.hmget(
         `${this.prefix}:${queue}:${id}`,
@@ -196,7 +297,7 @@ export class BullMQAdapter implements QueueAdapter {
   }
 
   async getJobDetail(queue: string, jobId: string): Promise<JobDetail | null> {
-    const data = await this.redis.hgetall(
+    const data = await this.cmd.hgetall(
       `${this.prefix}:${queue}:${jobId}`,
     );
     if (!data || Object.keys(data).length === 0) return null;
@@ -252,10 +353,10 @@ export class BullMQAdapter implements QueueAdapter {
     let jobIds: string[];
 
     if (status === 'waiting' || status === 'active') {
-      jobIds = await this.redis.lrange(key, offset, offset + limit - 1);
+      jobIds = await this.cmd.lrange(key, offset, offset + limit - 1);
     } else {
       // Sorted sets: completed, failed, delayed
-      jobIds = await this.redis.zrevrange(key, offset, offset + limit - 1);
+      jobIds = await this.cmd.zrevrange(key, offset, offset + limit - 1);
     }
 
     if (jobIds.length === 0) return [];
@@ -269,7 +370,7 @@ export class BullMQAdapter implements QueueAdapter {
   }
 
   async getCompletedCountSince(queue: string, since: number): Promise<number> {
-    return this.redis.zcount(
+    return this.cmd.zcount(
       `${this.prefix}:${queue}:completed`,
       String(since),
       '+inf',
@@ -277,7 +378,7 @@ export class BullMQAdapter implements QueueAdapter {
   }
 
   async getFailedCountSince(queue: string, since: number): Promise<number> {
-    return this.redis.zcount(
+    return this.cmd.zcount(
       `${this.prefix}:${queue}:failed`,
       String(since),
       '+inf',
@@ -289,11 +390,11 @@ export class BullMQAdapter implements QueueAdapter {
     limit: number,
   ): Promise<number[]> {
     const key = `${this.prefix}:${queue}:completed`;
-    const jobIds = await this.redis.zrevrange(key, 0, limit - 1);
+    const jobIds = await this.cmd.zrevrange(key, 0, limit - 1);
 
     if (jobIds.length === 0) return [];
 
-    const pipeline = this.redis.pipeline();
+    const pipeline = this.cmd.pipeline();
     for (const id of jobIds) {
       pipeline.hmget(
         `${this.prefix}:${queue}:${id}`,
@@ -315,12 +416,12 @@ export class BullMQAdapter implements QueueAdapter {
     return times;
   }
 
-  // Write operations use BullMQ Queue class
+  // Write operations use the ops connection via BullMQ Queue class
   private getQueue(name: string): Queue {
     let q = this.queueInstances.get(name);
     if (!q) {
       q = new Queue(name, {
-        connection: this.redis.duplicate(),
+        connection: this.ops.duplicate(),
         prefix: this.prefix,
       });
       this.queueInstances.set(name, q);
@@ -366,7 +467,7 @@ export class BullMQAdapter implements QueueAdapter {
 
   async retryAllFailed(queue: string): Promise<number> {
     const key = `${this.prefix}:${queue}:failed`;
-    const jobIds = await this.redis.zrange(key, 0, -1);
+    const jobIds = await this.ops.zrange(key, 0, -1);
     const q = this.getQueue(queue);
 
     let count = 0;
@@ -389,6 +490,8 @@ export class BullMQAdapter implements QueueAdapter {
       await q.close();
     }
     this.queueInstances.clear();
-    this.redis.disconnect();
+    this.cmd.disconnect();
+    this.stream.disconnect();
+    this.ops.disconnect();
   }
 }

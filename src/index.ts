@@ -7,7 +7,9 @@ import { Discovery } from './discovery.js';
 import { Collector } from './collector.js';
 import { MetricsStore } from './store.js';
 import { AnomalyDetector } from './anomaly.js';
+import { AlertEngine } from './alert-engine.js';
 import { Operations } from './operations.js';
+import { EventStreamConsumer } from './event-stream.js';
 import { SlackAlert } from './alerts/slack.js';
 import { DiscordAlert } from './alerts/discord.js';
 import { backfillAll } from './backfill.js';
@@ -25,7 +27,7 @@ program
   .requiredOption('--redis <url>', 'Redis connection URL')
   .option('--port <number>', 'Dashboard port', '3888')
   .option('--prefix <string>', 'BullMQ key prefix', 'bull')
-  .option('--poll-interval <seconds>', 'Metrics collection interval', '10')
+  .option('--poll-interval <seconds>', 'Metrics collection interval', '15')
   .option('--discovery-interval <seconds>', 'Queue discovery interval', '60')
   .option('--retention-days <number>', 'How long to keep metrics', '30')
   .option('--slack-webhook <url>', 'Slack incoming webhook URL')
@@ -65,12 +67,12 @@ async function start(config: DamasqasConfig): Promise<void> {
   // Initialize core components
   const adapter = new BullMQAdapter(config.redis, config.prefix);
   const store = new MetricsStore(config.dataDir, config.retentionDays);
-  const discovery = new Discovery(adapter, config.discoveryInterval);
-  const collector = new Collector(adapter, store, config.pollInterval, config.verbose);
+  const discovery = new Discovery(adapter, store, config.prefix);
   const anomalyDetector = new AnomalyDetector(store, adapter, config);
+  const alertEngine = new AlertEngine(store, adapter, config, config.verbose);
   const ops = new Operations(adapter);
 
-  // Set up alert channels
+  // Set up legacy alert channels (for anomaly-based alerts)
   const alertChannels: AlertChannel[] = [];
   if (config.slackWebhook) {
     alertChannels.push(new SlackAlert(config.slackWebhook));
@@ -81,16 +83,28 @@ async function start(config: DamasqasConfig): Promise<void> {
     console.log('[damasqas] Discord alerts enabled');
   }
 
-  // Discovery
+  // Create unified collector (orchestrates discovery, anomaly detection, alert evaluation)
+  const collector = new Collector(
+    adapter,
+    store,
+    discovery,
+    anomalyDetector,
+    alertEngine,
+    config.pollInterval,
+    config.discoveryInterval,
+    config.verbose,
+  );
+
+  // Initial discovery
   console.log('[damasqas] Discovering queues...');
-  const queues = await discovery.start();
+  const queues = await discovery.initialScan();
   console.log(`[damasqas] Found ${queues.length} queues: ${queues.join(', ') || '(none)'}`);
 
   discovery.on('queue:added', (name: string) => {
     console.log(`[damasqas] New queue discovered: ${name}`);
   });
-  discovery.on('queue:removed', (name: string) => {
-    console.log(`[damasqas] Queue removed: ${name}`);
+  discovery.on('queue:stale', (name: string) => {
+    console.log(`[damasqas] Queue marked stale: ${name}`);
   });
 
   // Backfill
@@ -99,16 +113,29 @@ async function start(config: DamasqasConfig): Promise<void> {
     await backfillAll(adapter, store, queues, config.verbose);
   }
 
-  // Start collection
+  // Start cleanup & collection
   store.startCleanup();
-  collector.start(() => discovery.getQueues());
-  console.log(`[damasqas] Collector running (every ${config.pollInterval}s)`);
+  console.log(`[damasqas] Collector running (every ${config.pollInterval}s, discovery every ${config.discoveryInterval}s)`);
 
   // Do initial collection
   await collector.collectAll(queues);
 
-  // Anomaly detection loop — runs after each collection cycle
-  const anomalyInterval = setInterval(async () => {
+  // Start the unified polling loop
+  collector.start();
+
+  // Start event stream consumer on the dedicated stream connection
+  const eventStream = new EventStreamConsumer(
+    adapter.getStreamConnection(),
+    store,
+    discovery,
+    config.prefix,
+    config.verbose,
+  );
+  eventStream.start();
+  console.log('[damasqas] Event stream consumer started');
+
+  // Anomaly alert dispatch loop (for legacy anomaly-based alerts)
+  const anomalyAlertInterval = setInterval(async () => {
     try {
       const currentQueues = discovery.getQueues();
       const anomalies = await anomalyDetector.detect(currentQueues);
@@ -147,12 +174,12 @@ async function start(config: DamasqasConfig): Promise<void> {
         await sendCloudEvent(config, anomaly);
       }
     } catch (err) {
-      console.error('[damasqas] Anomaly detection error:', err);
+      console.error('[damasqas] Anomaly alert dispatch error:', err);
     }
   }, config.pollInterval * 1000);
 
   // Start API server
-  const app = createServer(discovery, store, adapter, ops, config.redis, startTime, config.noDashboard);
+  const app = createServer(discovery, store, adapter, ops, startTime, config.noDashboard);
   const server = app.listen(config.port, () => {
     if (!config.noDashboard) {
       console.log(`[damasqas] Dashboard: http://localhost:${config.port}`);
@@ -164,9 +191,9 @@ async function start(config: DamasqasConfig): Promise<void> {
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\n[damasqas] Shutting down...');
-    clearInterval(anomalyInterval);
+    clearInterval(anomalyAlertInterval);
     collector.stop();
-    discovery.stop();
+    eventStream.stop();
     store.close();
     await adapter.disconnect();
     server.close();

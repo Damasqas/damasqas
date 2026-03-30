@@ -14,10 +14,14 @@ export function queueRoutes(
   router.get('/queues', async (_req, res) => {
     try {
       const names = discovery.getQueues();
-      const queues: QueueState[] = [];
+      const queues: (QueueState & { stale: boolean })[] = [];
 
       for (const name of names) {
-        queues.push(await buildQueueState(name, store, adapter));
+        const state = await buildQueueState(name, store, adapter);
+        queues.push({
+          ...state,
+          stale: discovery.isStale(name),
+        });
       }
 
       res.json({ queues });
@@ -36,7 +40,10 @@ export function queueRoutes(
       }
 
       const state = await buildQueueState(name, store, adapter);
-      res.json(state);
+      res.json({
+        ...state,
+        stale: discovery.isStale(name),
+      });
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch queue' });
     }
@@ -68,6 +75,8 @@ async function buildQueueState(
       completed: snapshot?.completed ?? 0,
       failed: snapshot?.failed ?? 0,
       delayed: snapshot?.delayed ?? 0,
+      prioritized: snapshot?.prioritized ?? 0,
+      waitingChildren: snapshot?.waitingChildren ?? 0,
     },
     processors: {
       locks: snapshot?.locks ?? 0,
