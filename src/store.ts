@@ -1637,6 +1637,150 @@ export class MetricsStore {
     };
   }
 
+  // ── Comparative Analytics Methods ─────────────────────────────────
+
+  /**
+   * Compare event-based metrics (completed, failed, fail rate, avg process time)
+   * for the current hour vs the same hour yesterday and same hour last week.
+   */
+  getEventComparison(queue: string): {
+    current: { completed: number; failed: number; failRate: number | null; avgProcessMs: number | null };
+    yesterday: { completed: number; failed: number; failRate: number | null; avgProcessMs: number | null } | null;
+    lastWeek: { completed: number; failed: number; failRate: number | null; avgProcessMs: number | null } | null;
+  } {
+    const now = Date.now();
+    const hourStart = now - (now % 3600000);
+    const hourEnd = now;
+
+    const queryPeriod = (since: number, until: number) => {
+      const row = this.db.prepare(`
+        SELECT
+          COUNT(*) FILTER (WHERE event_type = 'completed') as completed,
+          COUNT(*) FILTER (WHERE event_type = 'failed') as failed,
+          AVG(CASE WHEN event_type = 'completed' THEN
+            CAST(json_extract(data, '$.processedOn') AS REAL) - CAST(json_extract(data, '$.timestamp') AS REAL)
+          END) as avg_process_ms
+        FROM events
+        WHERE queue = ? AND ts BETWEEN ? AND ? AND event_type IN ('completed', 'failed')
+      `).get(queue, since, until) as { completed: number; failed: number; avg_process_ms: number | null } | undefined;
+
+      if (!row || (row.completed === 0 && row.failed === 0)) return null;
+
+      const total = row.completed + row.failed;
+      return {
+        completed: row.completed,
+        failed: row.failed,
+        failRate: total > 0 ? Math.round(row.failed * 1000 / total) / 10 : null,
+        avgProcessMs: row.avg_process_ms ? Math.round(row.avg_process_ms) : null,
+      };
+    };
+
+    const current = queryPeriod(hourStart, hourEnd) ?? { completed: 0, failed: 0, failRate: null, avgProcessMs: null };
+    const yesterday = queryPeriod(hourStart - 86400000, hourEnd - 86400000);
+    const lastWeek = queryPeriod(hourStart - 7 * 86400000, hourEnd - 7 * 86400000);
+
+    return { current, yesterday, lastWeek };
+  }
+
+  /**
+   * Compare snapshot-based metrics (queue depth, throughput, fail rate)
+   * for the current latest snapshot vs the closest snapshot at the same time yesterday and last week.
+   */
+  getSnapshotComparison(queue: string): {
+    current: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
+    yesterday: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
+    lastWeek: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
+  } {
+    const mapRow = (row: Record<string, unknown> | undefined) => {
+      if (!row) return null;
+      return {
+        waiting: row.waiting as number,
+        throughput: row.throughput_1m as number | null,
+        failRate: row.fail_rate_1m as number | null,
+        avgProcessMs: row.avg_process_ms as number | null,
+      };
+    };
+
+    // Get latest snapshot for this queue
+    const currentRow = this.db.prepare(
+      'SELECT * FROM snapshots WHERE queue = ? ORDER BY ts DESC LIMIT 1',
+    ).get(queue) as Record<string, unknown> | undefined;
+
+    if (!currentRow) return { current: null, yesterday: null, lastWeek: null };
+
+    const currentTs = currentRow.ts as number;
+
+    // Find closest snapshot at same time yesterday (within 30s window)
+    const yesterdayRow = this.db.prepare(`
+      SELECT * FROM snapshots
+      WHERE queue = ? AND ts BETWEEN ? AND ?
+      ORDER BY ABS(ts - ?) ASC
+      LIMIT 1
+    `).get(queue, currentTs - 86400000 - 30000, currentTs - 86400000 + 30000, currentTs - 86400000) as Record<string, unknown> | undefined;
+
+    // Find closest snapshot at same time last week (within 30s window)
+    const lastWeekRow = this.db.prepare(`
+      SELECT * FROM snapshots
+      WHERE queue = ? AND ts BETWEEN ? AND ?
+      ORDER BY ABS(ts - ?) ASC
+      LIMIT 1
+    `).get(queue, currentTs - 7 * 86400000 - 30000, currentTs - 7 * 86400000 + 30000, currentTs - 7 * 86400000) as Record<string, unknown> | undefined;
+
+    return {
+      current: mapRow(currentRow),
+      yesterday: mapRow(yesterdayRow),
+      lastWeek: mapRow(lastWeekRow),
+    };
+  }
+
+  /**
+   * Get comparison data for all queues at once (for Overview page).
+   * Returns snapshot-based comparison per queue.
+   */
+  getAllQueuesComparison(): Map<string, {
+    current: { waiting: number; throughput: number | null; failRate: number | null };
+    yesterday: { waiting: number; throughput: number | null; failRate: number | null } | null;
+  }> {
+    const result = new Map<string, {
+      current: { waiting: number; throughput: number | null; failRate: number | null };
+      yesterday: { waiting: number; throughput: number | null; failRate: number | null } | null;
+    }>();
+
+    // Get latest snapshot per queue
+    const latestRows = this.db.prepare(`
+      SELECT s.* FROM snapshots s
+      INNER JOIN (SELECT queue, MAX(ts) as max_ts FROM snapshots GROUP BY queue) latest
+        ON s.queue = latest.queue AND s.ts = latest.max_ts
+    `).all() as Record<string, unknown>[];
+
+    for (const row of latestRows) {
+      const queue = row.queue as string;
+      const currentTs = row.ts as number;
+
+      const yesterdayRow = this.db.prepare(`
+        SELECT waiting, throughput_1m, fail_rate_1m FROM snapshots
+        WHERE queue = ? AND ts BETWEEN ? AND ?
+        ORDER BY ABS(ts - ?) ASC
+        LIMIT 1
+      `).get(queue, currentTs - 86400000 - 30000, currentTs - 86400000 + 30000, currentTs - 86400000) as Record<string, unknown> | undefined;
+
+      result.set(queue, {
+        current: {
+          waiting: row.waiting as number,
+          throughput: row.throughput_1m as number | null,
+          failRate: row.fail_rate_1m as number | null,
+        },
+        yesterday: yesterdayRow ? {
+          waiting: yesterdayRow.waiting as number,
+          throughput: yesterdayRow.throughput_1m as number | null,
+          failRate: yesterdayRow.fail_rate_1m as number | null,
+        } : null,
+      });
+    }
+
+    return result;
+  }
+
   private rowToAlertRule(row: Record<string, unknown>): AlertRule {
     return {
       id: row.id as number,
