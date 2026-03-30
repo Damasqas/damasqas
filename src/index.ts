@@ -35,6 +35,7 @@ program
   .option('--cooldown <seconds>', 'Min seconds between repeat alerts', '300')
   .option('--failure-threshold <n>', 'Alert when failures exceed Nx baseline', '3')
   .option('--backlog-threshold <n>', 'Alert when backlog exceeds Nx baseline', '5')
+  .option('--no-redis-key-memory', 'Disable per-key MEMORY USAGE collection (every 30m)')
   .option('--api-key <key>', 'Damasqas Cloud API key')
   .option('--no-dashboard', 'Run collector only, no web UI')
   .option('--verbose', 'Debug logging')
@@ -51,6 +52,7 @@ program
       cooldown: parseInt(opts.cooldown, 10),
       failureThreshold: parseFloat(opts.failureThreshold),
       backlogThreshold: parseFloat(opts.backlogThreshold),
+      redisKeyMemoryUsage: opts.redisKeyMemory !== false,
       apiKey: opts.apiKey || null,
       noDashboard: !opts.dashboard,
       verbose: opts.verbose || false,
@@ -67,6 +69,20 @@ async function start(config: DamasqasConfig): Promise<void> {
   // Initialize core components
   const adapter = new BullMQAdapter(config.redis, config.prefix);
   await adapter.checkClockSkew();
+
+  // Check maxmemory-policy — BullMQ requires noeviction
+  try {
+    const policy = await adapter.checkMaxmemoryPolicy();
+    if (policy && policy !== 'noeviction' && policy !== 'unknown') {
+      console.warn(
+        `[damasqas] WARNING: Redis maxmemory-policy is "${policy}". BullMQ requires "noeviction". ` +
+        `With the current policy, Redis may evict BullMQ keys under memory pressure, causing data loss ` +
+        `and unpredictable queue behavior.`,
+      );
+    }
+  } catch {
+    // Non-critical — proceed without check
+  }
   const store = new MetricsStore(config.dataDir, config.retentionDays);
   const discovery = new Discovery(adapter, store, config.prefix);
   const anomalyDetector = new AnomalyDetector(store, adapter, config);
@@ -94,10 +110,15 @@ async function start(config: DamasqasConfig): Promise<void> {
     config.pollInterval,
     config.discoveryInterval,
     config.verbose,
+    config.prefix,
+    config.redisKeyMemoryUsage,
   );
 
   // Connect drain analyzer to alert engine for enhanced drain_negative alerts
   alertEngine.setDrainAnalyzer(collector.getDrainAnalyzer());
+
+  // Connect Redis health collector to alert engine for enhanced redis_memory alerts
+  alertEngine.setRedisHealthCollector(collector.getRedisHealthCollector());
 
   // Initial discovery
   console.log('[damasqas] Discovering queues...');

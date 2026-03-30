@@ -10,9 +10,12 @@ import type {
   ErrorGroupRecord,
   AlertRule,
   AlertFire,
+  RedisSnapshot,
+  RedisKeySize,
+  SlowlogEntry,
 } from './types.js';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export class MetricsStore {
   private db: Database.Database;
@@ -50,6 +53,9 @@ export class MetricsStore {
     }
     if (currentVersion < 3) {
       this.migrateV3();
+    }
+    if (currentVersion < 4) {
+      this.migrateV4();
     }
 
     if (!row) {
@@ -220,6 +226,44 @@ export class MetricsStore {
     } catch {
       // Column already exists — ignore
     }
+  }
+
+  /** V4: Redis health correlation tables */
+  private migrateV4(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS redis_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER NOT NULL,
+        used_memory INTEGER NOT NULL,
+        used_memory_peak INTEGER NOT NULL,
+        maxmemory INTEGER NOT NULL,
+        mem_fragmentation_ratio REAL,
+        connected_clients INTEGER NOT NULL,
+        ops_per_sec INTEGER NOT NULL,
+        total_keys INTEGER NOT NULL,
+        used_memory_rss INTEGER,
+        maxmemory_policy TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_redis_ts ON redis_snapshots(ts);
+
+      CREATE TABLE IF NOT EXISTS redis_key_sizes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER NOT NULL,
+        queue TEXT NOT NULL,
+        key_type TEXT NOT NULL,
+        entry_count INTEGER NOT NULL,
+        memory_bytes INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_keysizes_queue_ts ON redis_key_sizes(queue, ts);
+
+      CREATE TABLE IF NOT EXISTS slowlog_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts INTEGER NOT NULL,
+        duration_us INTEGER NOT NULL,
+        command TEXT NOT NULL,
+        is_bullmq INTEGER NOT NULL DEFAULT 0
+      );
+    `);
   }
 
   // ── Snapshot Methods ─────────────────────────────────────────────────
@@ -713,6 +757,152 @@ export class MetricsStore {
     }));
   }
 
+  // ── Redis Snapshot Methods ────────────────────────────────────────────
+
+  insertRedisSnapshot(snapshot: RedisSnapshot): void {
+    this.db.prepare(`
+      INSERT INTO redis_snapshots (
+        ts, used_memory, used_memory_peak, maxmemory,
+        mem_fragmentation_ratio, connected_clients, ops_per_sec, total_keys,
+        used_memory_rss, maxmemory_policy
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      snapshot.ts,
+      snapshot.usedMemory,
+      snapshot.usedMemoryPeak,
+      snapshot.maxmemory,
+      snapshot.memFragmentationRatio,
+      snapshot.connectedClients,
+      snapshot.opsPerSec,
+      snapshot.totalKeys,
+      snapshot.usedMemoryRss,
+      snapshot.maxmemoryPolicy,
+    );
+  }
+
+  getLatestRedisSnapshot(): RedisSnapshot | null {
+    const row = this.db.prepare(
+      'SELECT * FROM redis_snapshots ORDER BY ts DESC LIMIT 1',
+    ).get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.rowToRedisSnapshot(row);
+  }
+
+  getRedisSnapshots(since: number, until: number): RedisSnapshot[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM redis_snapshots WHERE ts >= ? AND ts <= ? ORDER BY ts ASC',
+    ).all(since, until) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToRedisSnapshot(r));
+  }
+
+  getRedisSnapshotsAggregated(since: number, until: number, bucketMs: number): RedisSnapshot[] {
+    const rows = this.db.prepare(`
+      SELECT
+        (ts / ?) * ? AS ts,
+        AVG(used_memory) AS used_memory,
+        MAX(used_memory_peak) AS used_memory_peak,
+        MAX(maxmemory) AS maxmemory,
+        AVG(mem_fragmentation_ratio) AS mem_fragmentation_ratio,
+        AVG(connected_clients) AS connected_clients,
+        AVG(ops_per_sec) AS ops_per_sec,
+        AVG(total_keys) AS total_keys,
+        AVG(used_memory_rss) AS used_memory_rss,
+        MAX(maxmemory_policy) AS maxmemory_policy
+      FROM redis_snapshots
+      WHERE ts >= ? AND ts <= ?
+      GROUP BY ts / ?
+      ORDER BY ts ASC
+    `).all(bucketMs, bucketMs, since, until, bucketMs) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToRedisSnapshot(r));
+  }
+
+  getRecentRedisSnapshots(count: number): RedisSnapshot[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM redis_snapshots ORDER BY ts DESC LIMIT ?',
+    ).all(count) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToRedisSnapshot(r)).reverse();
+  }
+
+  // ── Redis Key Size Methods ───────────────────────────────────────────
+
+  insertRedisKeySizes(sizes: RedisKeySize[]): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO redis_key_sizes (ts, queue, key_type, entry_count, memory_bytes)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const insertAll = this.db.transaction(() => {
+      for (const s of sizes) {
+        stmt.run(s.ts, s.queue, s.keyType, s.entryCount, s.memoryBytes);
+      }
+    });
+    insertAll();
+  }
+
+  getLatestKeySizes(): RedisKeySize[] {
+    // Get the most recent timestamp that has key size data
+    const tsRow = this.db.prepare(
+      'SELECT MAX(ts) as max_ts FROM redis_key_sizes',
+    ).get() as { max_ts: number | null } | undefined;
+
+    if (!tsRow?.max_ts) return [];
+
+    const rows = this.db.prepare(
+      'SELECT * FROM redis_key_sizes WHERE ts = ? ORDER BY entry_count DESC',
+    ).all(tsRow.max_ts) as Record<string, unknown>[];
+
+    return rows.map((r) => this.rowToRedisKeySize(r));
+  }
+
+  getPreviousKeySizes(beforeTs: number): RedisKeySize[] {
+    // Get the most recent collection before the given timestamp
+    const tsRow = this.db.prepare(
+      'SELECT MAX(ts) as max_ts FROM redis_key_sizes WHERE ts < ?',
+    ).get(beforeTs) as { max_ts: number | null } | undefined;
+
+    if (!tsRow?.max_ts) return [];
+
+    const rows = this.db.prepare(
+      'SELECT * FROM redis_key_sizes WHERE ts = ? ORDER BY entry_count DESC',
+    ).all(tsRow.max_ts) as Record<string, unknown>[];
+
+    return rows.map((r) => this.rowToRedisKeySize(r));
+  }
+
+  getKeySizeHistory(queue: string, since: number, until: number): RedisKeySize[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM redis_key_sizes WHERE queue = ? AND ts >= ? AND ts <= ? ORDER BY ts ASC',
+    ).all(queue, since, until) as Record<string, unknown>[];
+    return rows.map((r) => this.rowToRedisKeySize(r));
+  }
+
+  // ── Slowlog Methods ──────────────────────────────────────────────────
+
+  insertSlowlogEntries(entries: SlowlogEntry[]): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO slowlog_entries (ts, duration_us, command, is_bullmq)
+      VALUES (?, ?, ?, ?)
+    `);
+    const insertAll = this.db.transaction(() => {
+      for (const e of entries) {
+        stmt.run(e.ts, e.durationUs, e.command, e.isBullMQ ? 1 : 0);
+      }
+    });
+    insertAll();
+  }
+
+  getSlowlogEntries(since: number, limit = 50): SlowlogEntry[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM slowlog_entries WHERE ts >= ? ORDER BY ts DESC LIMIT ?',
+    ).all(since, limit) as Record<string, unknown>[];
+
+    return rows.map((r) => ({
+      ts: r.ts as number,
+      durationUs: r.duration_us as number,
+      command: r.command as string,
+      isBullMQ: (r.is_bullmq as number) === 1,
+    }));
+  }
+
   // ── Cleanup & Lifecycle ──────────────────────────────────────────────
 
   startCleanup(): void {
@@ -782,6 +972,11 @@ export class MetricsStore {
     }
 
     this.db.prepare('DELETE FROM alert_fires WHERE ts < ?').run(cutoff);
+
+    // Redis health tables
+    this.db.prepare('DELETE FROM redis_snapshots WHERE ts < ?').run(cutoff);
+    this.db.prepare('DELETE FROM redis_key_sizes WHERE ts < ?').run(cutoff);
+    this.db.prepare('DELETE FROM slowlog_entries WHERE ts < ?').run(cutoff);
   }
 
   close(): void {
@@ -854,6 +1049,31 @@ export class MetricsStore {
       count: row.count as number,
       firstSeen: row.first_seen as number,
       lastSeen: row.last_seen as number,
+    };
+  }
+
+  private rowToRedisSnapshot(row: Record<string, unknown>): RedisSnapshot {
+    return {
+      ts: row.ts as number,
+      usedMemory: row.used_memory as number,
+      usedMemoryPeak: row.used_memory_peak as number,
+      maxmemory: row.maxmemory as number,
+      memFragmentationRatio: row.mem_fragmentation_ratio as number | null,
+      connectedClients: row.connected_clients as number,
+      opsPerSec: row.ops_per_sec as number,
+      totalKeys: row.total_keys as number,
+      usedMemoryRss: row.used_memory_rss as number | null,
+      maxmemoryPolicy: row.maxmemory_policy as string | null,
+    };
+  }
+
+  private rowToRedisKeySize(row: Record<string, unknown>): RedisKeySize {
+    return {
+      ts: row.ts as number,
+      queue: row.queue as string,
+      keyType: row.key_type as string,
+      entryCount: row.entry_count as number,
+      memoryBytes: row.memory_bytes as number | null,
     };
   }
 

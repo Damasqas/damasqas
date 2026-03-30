@@ -163,6 +163,7 @@ export interface DamasqasConfig {
   failureThreshold: number;
   backlogThreshold: number;
   stallAlert: boolean;
+  redisKeyMemoryUsage: boolean;
   apiKey: string | null;
   noDashboard: boolean;
   verbose: boolean;
@@ -219,4 +220,48 @@ export interface OverdueDelayedJob {
   timestamp: number;
   scheduledFor: number;
   overdueByMs: number;
+}
+
+// ── Redis Health Types ────────────────────────────────────────────────
+
+export interface RedisSnapshot {
+  ts: number;
+  usedMemory: number;
+  usedMemoryPeak: number;
+  maxmemory: number;
+  memFragmentationRatio: number | null;
+  connectedClients: number;
+  opsPerSec: number;
+  totalKeys: number;
+  usedMemoryRss: number | null;
+  maxmemoryPolicy: string | null;
+}
+
+export interface RedisKeySize {
+  ts: number;
+  queue: string;
+  keyType: string;
+  entryCount: number;
+  memoryBytes: number | null;
+}
+
+export interface SlowlogEntry {
+  ts: number;
+  durationUs: number;
+  command: string;
+  isBullMQ: boolean;
+}
+
+export interface OOMProjection {
+  hoursUntilOOM: number | null;
+  growthRateMBPerHour: number;
+}
+
+export interface KeyGrowth {
+  queue: string;
+  keyType: string;
+  entries: number;
+  entryDelta: number;
+  memoryBytes: number | null;
+  memoryDelta: number | null;
 }

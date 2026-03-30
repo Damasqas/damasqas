@@ -5,6 +5,9 @@ import type {
   JobDetail,
   ErrorGroup,
   OverdueDelayedJob,
+  RedisSnapshot,
+  RedisKeySize,
+  SlowlogEntry,
 } from '../types.js';
 
 export interface QueueAdapter {
@@ -57,6 +60,13 @@ export interface QueueAdapter {
 
   // Clock skew
   checkClockSkew(): Promise<void>;
+
+  // Redis health
+  collectRedisInfo(): Promise<RedisSnapshot>;
+  collectKeySizes(queues: string[], prefix: string): Promise<RedisKeySize[]>;
+  collectKeyMemoryUsage(queues: string[], prefix: string): Promise<RedisKeySize[]>;
+  collectSlowlog(): Promise<{ entries: SlowlogEntry[]; totalCount: number }>;
+  checkMaxmemoryPolicy(): Promise<string>;
 
   // Connection accessors
   getStreamConnection(): Redis;
