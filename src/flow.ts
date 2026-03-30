@@ -367,7 +367,7 @@ function resolveState(
   if (results[offset]![1] !== null) return 'completed';
   if (results[offset + 1]![1] !== null) return 'failed';
   if (results[offset + 2]![1] !== null) return 'delayed';
-  if (results[offset + 3]![1] !== null) return 'prioritized' as FlowJobState; // treat as waiting
+  if (results[offset + 3]![1] !== null) return 'waiting'; // prioritized = waiting
   if (results[offset + 4]![1] !== null) return 'waiting-children';
   if (results[offset + 7]![1] === 1) return 'active'; // has lock
   if (results[offset + 5]![1] !== null) return 'waiting';

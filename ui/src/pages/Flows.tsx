@@ -72,15 +72,15 @@ export function Flows({ onSelectQueue }: FlowsProps) {
           )}
         </div>
 
-        {deadlocks.map((dl, i) => (
+        {deadlocks.map((dl) => (
           <div
-            key={`${dl.parentQueue}:${dl.parentJobId}:${dl.childJobId}:${i}`}
+            key={`${dl.parentQueue}:${dl.parentJobId}:${dl.childQueue}:${dl.childJobId}`}
             style={{
               background: '#0a0a0a',
               border: '1px solid #331111',
               borderRadius: 6,
               padding: 12,
-              marginBottom: i < deadlocks.length - 1 ? 8 : 0,
+              marginBottom: 8,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
