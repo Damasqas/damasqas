@@ -104,70 +104,40 @@ export class EventStreamConsumer {
           continue;
         }
 
-        // Chunk queues into groups of 20 for XREAD scalability
+        // Chunk queues into groups of 20 for XREAD scalability.
         const chunks = chunkArray(queues, 20);
 
-        // Run concurrent XREAD calls across chunks
-        const allResults = await Promise.all(
-          chunks.map((chunk) => this.xreadChunk(chunk)),
-        );
+        let gotData = false;
 
-        // Process results from all chunks
-        for (const results of allResults) {
-          if (!results) continue;
+        if (chunks.length === 1) {
+          // Single chunk: use BLOCK for efficiency — one XREAD call
+          // blocks the connection waiting for data, no busy-polling.
+          const results = await this.xreadChunk(chunks[0]!, true);
+          if (results) {
+            gotData = true;
+            this.processXreadResults(results);
+          }
+        } else {
+          // Multiple chunks: CANNOT use BLOCK. Redis processes commands
+          // sequentially on a single connection, so concurrent BLOCK calls
+          // would serialize (chunk1 blocks 5s, then chunk2 blocks 5s, etc.)
+          // giving O(N * timeout) latency. Use non-blocking XREAD instead
+          // and sleep at the end if there was no data.
+          const allResults = await Promise.all(
+            chunks.map((chunk) => this.xreadChunk(chunk, false)),
+          );
 
-          for (const [streamKey, entries] of results) {
-            const queueName = this.extractQueueName(streamKey);
-            if (!queueName) continue;
-
-            let lastIdForQueue: string | undefined;
-
-            for (const [streamId, fields] of entries) {
-              lastIdForQueue = streamId;
-              this.lastIds.set(queueName, streamId);
-
-              const data = this.parseFields(fields);
-              const eventType = data.event || 'unknown';
-              const jobId = data.jobId || '';
-
-              const event: EventRecord = {
-                queue: queueName,
-                eventType,
-                jobId,
-                jobName: null,
-                ts: this.streamIdToTimestamp(streamId),
-                data: JSON.stringify(data),
-              };
-
-              try {
-                this.store.insertEvent(event);
-
-                if (eventType === 'failed' && data.failedReason) {
-                  const signature = this.normalizeError(data.failedReason);
-                  this.store.upsertErrorGroup(
-                    queueName,
-                    signature,
-                    data.failedReason,
-                    jobId,
-                  );
-                }
-
-                if (this.verbose) {
-                  console.log(`[event-stream] ${queueName}: ${eventType} job=${jobId}`);
-                }
-              } catch (err) {
-                console.error(`[event-stream] Failed to persist event:`, err);
-              }
+          for (const results of allResults) {
+            if (results) {
+              gotData = true;
+              this.processXreadResults(results);
             }
+          }
 
-            // Persist cursor after processing all entries for this queue
-            if (lastIdForQueue) {
-              try {
-                this.store.setStreamCursor(queueName, lastIdForQueue);
-              } catch (err) {
-                console.error(`[event-stream] Failed to persist cursor:`, err);
-              }
-            }
+          // If no data from any chunk, sleep to avoid busy-polling.
+          // This approximates the BLOCK behavior.
+          if (!gotData) {
+            await sleep(2000);
           }
         }
       } catch (err) {
@@ -178,50 +148,126 @@ export class EventStreamConsumer {
     }
   }
 
+  private processXreadResults(
+    results: [string, [string, string[]][]][],
+  ): void {
+    for (const [streamKey, entries] of results) {
+      const queueName = this.extractQueueName(streamKey);
+      if (!queueName) continue;
+
+      let lastIdForQueue: string | undefined;
+
+      for (const [streamId, fields] of entries) {
+        lastIdForQueue = streamId;
+        this.lastIds.set(queueName, streamId);
+
+        const data = this.parseFields(fields);
+        const eventType = data.event || 'unknown';
+        const jobId = data.jobId || '';
+
+        const event: EventRecord = {
+          queue: queueName,
+          eventType,
+          jobId,
+          jobName: null,
+          ts: this.streamIdToTimestamp(streamId),
+          data: JSON.stringify(data),
+        };
+
+        try {
+          this.store.insertEvent(event);
+
+          if (eventType === 'failed' && data.failedReason) {
+            const signature = this.normalizeError(data.failedReason);
+            this.store.upsertErrorGroup(
+              queueName,
+              signature,
+              data.failedReason,
+              jobId,
+            );
+          }
+
+          if (this.verbose) {
+            console.log(`[event-stream] ${queueName}: ${eventType} job=${jobId}`);
+          }
+        } catch (err) {
+          console.error(`[event-stream] Failed to persist event:`, err);
+        }
+      }
+
+      // Persist cursor after processing all entries for this queue
+      if (lastIdForQueue) {
+        try {
+          this.store.setStreamCursor(queueName, lastIdForQueue);
+        } catch (err) {
+          console.error(`[event-stream] Failed to persist cursor:`, err);
+        }
+      }
+    }
+  }
+
   private async xreadChunk(
     queues: string[],
+    block: boolean,
   ): Promise<[string, [string, string[]][]][] | null> {
     const streamKeys = queues.map((q) => `${this.prefix}:${q}:events`);
     const streamIds = queues.map((q) => this.lastIds.get(q) ?? '0-0');
 
-    const results = await (this.redis.xread as Function)(
-      'BLOCK', 5000,
+    if (block) {
+      return await (this.redis.xread as Function)(
+        'BLOCK', 5000,
+        'COUNT', 100,
+        'STREAMS', ...streamKeys, ...streamIds,
+      ) as [string, [string, string[]][]][] | null;
+    }
+
+    // Non-blocking: no BLOCK keyword, returns immediately
+    return await (this.redis.xread as Function)(
       'COUNT', 100,
       'STREAMS', ...streamKeys, ...streamIds,
     ) as [string, [string, string[]][]][] | null;
-
-    return results;
   }
 
+  /**
+   * Batch-hydrate job names for events with NULL job_name.
+   * Collects unhydrated job IDs across ALL queues, then issues a single
+   * pipelined HGET batch to Redis. This is O(1) round-trips regardless
+   * of queue count.
+   */
   private async hydrateJobNames(): Promise<void> {
     const queues = this.discovery.getQueues();
-    let totalHydrated = 0;
 
+    // Collect all (queue, jobId) pairs in one pass
+    const work: { queue: string; jobId: string }[] = [];
     for (const queue of queues) {
       const jobIds = this.store.getUnhydratedEventJobIds(queue);
-      if (jobIds.length === 0) continue;
-
-      const pipeline = this.cmdRedis.pipeline();
       for (const jobId of jobIds) {
-        pipeline.hget(`${this.prefix}:${queue}:${jobId}`, 'name');
+        work.push({ queue, jobId });
       }
-
-      const results = await pipeline.exec();
-      if (!results) continue;
-
-      const updates: { queue: string; jobId: string; jobName: string }[] = [];
-      for (let i = 0; i < jobIds.length; i++) {
-        const [err, name] = results[i]!;
-        const resolvedName = err ? '[error]' : ((name as string) || '[deleted]');
-        updates.push({ queue, jobId: jobIds[i]!, jobName: resolvedName });
-      }
-
-      this.store.batchUpdateJobNames(updates);
-      totalHydrated += updates.length;
     }
 
-    if (this.verbose && totalHydrated > 0) {
-      console.log(`[event-stream] Hydrated ${totalHydrated} job names`);
+    if (work.length === 0) return;
+
+    // Single pipeline for all HGET calls across all queues
+    const pipeline = this.cmdRedis.pipeline();
+    for (const { queue, jobId } of work) {
+      pipeline.hget(`${this.prefix}:${queue}:${jobId}`, 'name');
+    }
+
+    const results = await pipeline.exec();
+    if (!results) return;
+
+    const updates: { queue: string; jobId: string; jobName: string }[] = [];
+    for (let i = 0; i < work.length; i++) {
+      const [err, name] = results[i]!;
+      const resolvedName = err ? '[error]' : ((name as string) || '[deleted]');
+      updates.push({ queue: work[i]!.queue, jobId: work[i]!.jobId, jobName: resolvedName });
+    }
+
+    this.store.batchUpdateJobNames(updates);
+
+    if (this.verbose && updates.length > 0) {
+      console.log(`[event-stream] Hydrated ${updates.length} job names across ${queues.length} queues`);
     }
   }
 

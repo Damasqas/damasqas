@@ -269,13 +269,21 @@ export class MetricsStore {
     `);
   }
 
-  /** V5: Stream cursor persistence for event stream consumer */
+  /** V5: Stream cursor persistence + hydration index for event stream consumer */
   private migrateV5(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS stream_cursors (
         queue TEXT PRIMARY KEY,
         last_stream_id TEXT NOT NULL
       );
+    `);
+
+    // Partial index for the hydration query (runs every 5s).
+    // Without this, getUnhydratedEventJobIds does a full scan on events
+    // WHERE queue = ? AND job_name IS NULL, which degrades as the table grows.
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_events_unhydrated
+        ON events(queue, job_id) WHERE job_name IS NULL;
     `);
   }
 
