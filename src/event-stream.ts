@@ -314,10 +314,37 @@ export class EventStreamConsumer {
     const timings: JobTimingRecord[] = [];
     for (let i = 0; i < work.length; i++) {
       const [err, fields] = results[i]!;
-      if (err || !fields) continue;
+      if (err || !fields) {
+        // Redis error — insert sentinel (-1) to prevent infinite retry.
+        // Common when job hash is already deleted (removeOnComplete: true).
+        timings.push({
+          queue: work[i]!.queue,
+          jobName: work[i]!.jobName,
+          jobId: work[i]!.jobId,
+          ts: work[i]!.ts,
+          waitMs: -1,
+          processMs: -1,
+        });
+        continue;
+      }
 
       const [timestamp, processedOn, finishedOn] = fields as (string | null)[];
-      if (!timestamp || !processedOn || !finishedOn) continue;
+      if (!timestamp || !processedOn || !finishedOn) {
+        // Job hash deleted (removeOnComplete/removeOnFail) or fields missing.
+        // Insert sentinel row so the LEFT JOIN in getUnhydratedTimingEvents
+        // stops returning this event. Without this, we'd retry the same
+        // HMGET every 10 seconds for up to 1 hour (until event retention
+        // deletes the completed event).
+        timings.push({
+          queue: work[i]!.queue,
+          jobName: work[i]!.jobName,
+          jobId: work[i]!.jobId,
+          ts: work[i]!.ts,
+          waitMs: -1,
+          processMs: -1,
+        });
+        continue;
+      }
 
       const ts = Number(timestamp);
       const processed = Number(processedOn);

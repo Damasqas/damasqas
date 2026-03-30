@@ -777,15 +777,18 @@ export class MetricsStore {
   /**
    * Find completed events that haven't been timing-hydrated yet.
    * Uses LEFT JOIN against job_timings to find events without a matching row.
+   * Bounded to the last hour since tiered event retention deletes completed
+   * events after 1 hour anyway — no point scanning older data.
    */
   getUnhydratedTimingEvents(queue: string, limit = 200): { id: number; queue: string; jobId: string; jobName: string; ts: number }[] {
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
     return this.db.prepare(`
       SELECT e.id, e.queue, e.job_id as jobId, e.job_name as jobName, e.ts
       FROM events e
       LEFT JOIN job_timings jt ON e.queue = jt.queue AND e.job_id = jt.job_id
-      WHERE e.queue = ? AND e.event_type = 'completed' AND e.job_name IS NOT NULL AND jt.id IS NULL
+      WHERE e.queue = ? AND e.event_type = 'completed' AND e.job_name IS NOT NULL AND e.ts >= ? AND jt.id IS NULL
       LIMIT ?
-    `).all(queue, limit) as { id: number; queue: string; jobId: string; jobName: string; ts: number }[];
+    `).all(queue, oneHourAgo, limit) as { id: number; queue: string; jobId: string; jobName: string; ts: number }[];
   }
 
   /**
@@ -805,14 +808,16 @@ export class MetricsStore {
       ORDER BY failed DESC
     `).all(queue, since, until) as { job_name: string; completed: number; failed: number }[];
 
-    // Get timing averages from job_timings table
+    // Get timing averages from job_timings table.
+    // Filter wait_ms >= 0 to exclude sentinel rows (-1) inserted when
+    // the job hash was already deleted from Redis (removeOnComplete).
     const timingRows = this.db.prepare(`
       SELECT
         job_name,
         AVG(wait_ms) as avg_wait_ms,
         AVG(process_ms) as avg_process_ms
       FROM job_timings
-      WHERE queue = ? AND ts >= ? AND ts <= ?
+      WHERE queue = ? AND ts >= ? AND ts <= ? AND wait_ms >= 0
       GROUP BY job_name
     `).all(queue, since, until) as { job_name: string; avg_wait_ms: number | null; avg_process_ms: number | null }[];
 
@@ -823,7 +828,7 @@ export class MetricsStore {
     const jobNames = eventRows.map((r) => r.job_name);
     for (const jobName of jobNames) {
       const processTimes = this.db.prepare(
-        'SELECT process_ms FROM job_timings WHERE queue = ? AND job_name = ? AND ts >= ? AND ts <= ? ORDER BY process_ms',
+        'SELECT process_ms FROM job_timings WHERE queue = ? AND job_name = ? AND ts >= ? AND ts <= ? AND wait_ms >= 0 ORDER BY process_ms',
       ).all(queue, jobName, since, until) as { process_ms: number }[];
       if (processTimes.length > 0) {
         const idx = Math.floor(processTimes.length * 0.95);
@@ -905,7 +910,7 @@ export class MetricsStore {
       completed: number; failed: number;
     }[];
 
-    // Get per-minute timing averages
+    // Get per-minute timing averages (exclude sentinel rows from deleted hashes)
     const timingRows = this.db.prepare(`
       SELECT
         queue, job_name,
@@ -913,7 +918,7 @@ export class MetricsStore {
         AVG(wait_ms) as avg_wait_ms,
         AVG(process_ms) as avg_process_ms
       FROM job_timings
-      WHERE ts >= ? AND ts <= ?
+      WHERE ts >= ? AND ts <= ? AND wait_ms >= 0
       GROUP BY queue, job_name, minute_ts
     `).all(since, until) as {
       queue: string; job_name: string; minute_ts: number;
@@ -932,7 +937,7 @@ export class MetricsStore {
     // Compute p95 per (queue, job_name, minute) bucket
     const p95Lookup = new Map<string, Map<string, Map<number, number>>>();
     const p95Stmt = this.db.prepare(
-      'SELECT process_ms FROM job_timings WHERE queue = ? AND job_name = ? AND ts >= ? AND ts < ? ORDER BY process_ms',
+      'SELECT process_ms FROM job_timings WHERE queue = ? AND job_name = ? AND ts >= ? AND ts < ? AND wait_ms >= 0 ORDER BY process_ms',
     );
 
     // Deduplicate buckets to avoid redundant queries
