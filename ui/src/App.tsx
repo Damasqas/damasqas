@@ -5,8 +5,9 @@ import { FailedJobs } from './pages/FailedJobs';
 import { Alerts } from './pages/Alerts';
 import { RedisHealth } from './pages/RedisHealth';
 import { EventTimeline } from './pages/EventTimeline';
+import { Flows } from './pages/Flows';
 
-type View = 'overview' | 'queue' | 'failed' | 'alerts' | 'redis' | 'events';
+type View = 'overview' | 'queue' | 'failed' | 'alerts' | 'redis' | 'events' | 'flows';
 
 const globalStyles = `
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -69,6 +70,9 @@ export function App() {
           <NavButton active={view === 'events'} onClick={() => navigate('events')}>
             Events
           </NavButton>
+          <NavButton active={view === 'flows'} onClick={() => navigate('flows')}>
+            Flows
+          </NavButton>
           <NavButton active={view === 'redis'} onClick={() => navigate('redis')}>
             Redis
           </NavButton>
@@ -94,6 +98,7 @@ export function App() {
             />
           )}
           {view === 'events' && <EventTimeline />}
+          {view === 'flows' && <Flows onSelectQueue={(q) => navigate('queue', q)} />}
           {view === 'redis' && <RedisHealth />}
           {view === 'alerts' && <Alerts />}
         </main>

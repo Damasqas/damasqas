@@ -15,6 +15,7 @@ import { DiscordAlert } from './alerts/discord.js';
 import { backfillAll } from './backfill.js';
 import { sendCloudEvent } from './cloud.js';
 import { createServer } from './api.js';
+import { FlowInspector } from './flow.js';
 import type { AlertChannel } from './alerts/types.js';
 import type { DamasqasConfig, AlertPayload } from './types.js';
 
@@ -112,6 +113,10 @@ async function start(config: DamasqasConfig): Promise<void> {
     config.verbose,
     config.redisKeyMemoryUsage,
   );
+
+  // Flow dependency inspector for deadlock detection
+  const flowInspector = new FlowInspector(adapter.getCmdConnection(), config.prefix);
+  collector.setFlowInspector(flowInspector);
 
   // Connect drain analyzer to alert engine for enhanced drain_negative alerts
   alertEngine.setDrainAnalyzer(collector.getDrainAnalyzer());
