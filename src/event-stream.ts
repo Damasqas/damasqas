@@ -4,31 +4,40 @@ import type { Discovery } from './discovery.js';
 import type { EventRecord } from './types.js';
 
 /**
- * EventStreamConsumer uses a dedicated Redis connection to run a blocking
+ * EventStreamConsumer uses a dedicated Redis connection to run blocking
  * XREAD across all discovered queue event streams. Events are persisted
  * to the SQLite events table and FTS index.
  *
  * BullMQ publishes events to {prefix}:{queueName}:events as a Redis Stream.
  * Stream entry fields: event (type), jobId, prev (previous state), plus
  * event-specific fields like failedReason, returnvalue, etc.
+ *
+ * Features:
+ * - Cursor persistence: resumes from last-read stream ID across restarts
+ * - XREAD chunking: groups of 20 queues per XREAD call for scalability
+ * - Job name hydration: batch HGET every 5s to resolve job names
  */
 export class EventStreamConsumer {
   private redis: Redis;
+  private cmdRedis: Redis;
   private store: MetricsStore;
   private discovery: Discovery;
   private prefix: string;
   private lastIds = new Map<string, string>();
   private running = false;
   private verbose: boolean;
+  private hydrateTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     redis: Redis,
+    cmdRedis: Redis,
     store: MetricsStore,
     discovery: Discovery,
     prefix: string,
     verbose = false,
   ) {
     this.redis = redis;
+    this.cmdRedis = cmdRedis;
     this.store = store;
     this.discovery = discovery;
     this.prefix = prefix;
@@ -39,21 +48,20 @@ export class EventStreamConsumer {
     if (this.running) return;
     this.running = true;
 
-    // Initialize lastIds for all known queues (start from $ = only new events)
+    // Load persisted cursors from SQLite
+    const persistedCursors = this.store.getAllStreamCursors();
+
+    // Initialize lastIds for all known queues
     for (const queue of this.discovery.getQueues()) {
-      if (!this.lastIds.has(queue)) {
-        this.lastIds.set(queue, '$');
-      }
+      const cursor = persistedCursors.get(queue);
+      this.lastIds.set(queue, cursor ?? '0-0');
     }
 
     // Listen for new queue discoveries
     this.discovery.on('queue:added', (name: string) => {
       if (!this.lastIds.has(name)) {
-        this.lastIds.set(name, '$');
+        this.lastIds.set(name, '0-0');
       }
-      // Interrupt the current XREAD block so it picks up the new stream
-      // by disconnecting and reconnecting — ioredis auto-reconnects.
-      // The readLoop catch block handles reconnection gracefully.
     });
 
     // Start the read loop
@@ -62,12 +70,24 @@ export class EventStreamConsumer {
         console.error('[event-stream] Read loop crashed:', err);
       }
     });
+
+    // Start the job name hydration loop (every 5 seconds)
+    this.hydrateTimer = setInterval(() => {
+      this.hydrateJobNames().catch((err) => {
+        console.error('[event-stream] Hydration error:', err);
+      });
+    }, 5000);
   }
 
   stop(): void {
     this.running = false;
+
+    if (this.hydrateTimer) {
+      clearInterval(this.hydrateTimer);
+      this.hydrateTimer = null;
+    }
+
     // Force-disconnect to interrupt any pending XREAD BLOCK.
-    // The readLoop will exit on the next iteration since running=false.
     try {
       this.redis.disconnect();
     } catch {
@@ -80,86 +100,132 @@ export class EventStreamConsumer {
       try {
         const queues = this.discovery.getQueues();
         if (queues.length === 0) {
-          // No queues yet — wait a bit and retry
           await sleep(2000);
           continue;
         }
 
-        // Build XREAD args: BLOCK 2000 COUNT 100 STREAMS key1 key2 ... id1 id2 ...
-        // Use a short block (2s) so we can pick up new queues promptly.
-        const streamKeys = queues.map((q) => `${this.prefix}:${q}:events`);
-        const streamIds = queues.map((q) => this.lastIds.get(q) ?? '$');
+        // Chunk queues into groups of 20 for XREAD scalability
+        const chunks = chunkArray(queues, 20);
 
-        // Use the typed xread method with proper literal tokens so ioredis
-        // applies its response transformer (parsing nested arrays into the
-        // [key, [id, fields][]][] format). The cast through unknown is needed
-        // because TypeScript can't verify the spread args match an overload.
-        const results = await (this.redis.xread as Function)(
-          'BLOCK', 2000,
-          'COUNT', 100,
-          'STREAMS', ...streamKeys, ...streamIds,
-        ) as [string, [string, string[]][]][] | null;
+        // Run concurrent XREAD calls across chunks
+        const allResults = await Promise.all(
+          chunks.map((chunk) => this.xreadChunk(chunk)),
+        );
 
-        if (!results) continue; // timeout, no new events
+        // Process results from all chunks
+        for (const results of allResults) {
+          if (!results) continue;
 
-        for (const [streamKey, entries] of results) {
-          // Extract queue name from stream key: {prefix}:{queueName}:events
-          const queueName = this.extractQueueName(streamKey);
-          if (!queueName) continue;
+          for (const [streamKey, entries] of results) {
+            const queueName = this.extractQueueName(streamKey);
+            if (!queueName) continue;
 
-          for (const [streamId, fields] of entries) {
-            // Update last ID for this queue
-            this.lastIds.set(queueName, streamId);
+            let lastIdForQueue: string | undefined;
 
-            // Parse fields array into key-value pairs
-            const data = this.parseFields(fields);
-            const eventType = data.event || 'unknown';
-            const jobId = data.jobId || '';
+            for (const [streamId, fields] of entries) {
+              lastIdForQueue = streamId;
+              this.lastIds.set(queueName, streamId);
 
-            // Build event record
-            const event: EventRecord = {
-              queue: queueName,
-              eventType,
-              jobId,
-              jobName: data.name || null,
-              ts: this.streamIdToTimestamp(streamId),
-              data: JSON.stringify(data),
-            };
+              const data = this.parseFields(fields);
+              const eventType = data.event || 'unknown';
+              const jobId = data.jobId || '';
 
-            try {
-              this.store.insertEvent(event);
+              const event: EventRecord = {
+                queue: queueName,
+                eventType,
+                jobId,
+                jobName: null,
+                ts: this.streamIdToTimestamp(streamId),
+                data: JSON.stringify(data),
+              };
 
-              // For failed events, update error groups
-              if (eventType === 'failed' && data.failedReason) {
-                const signature = this.normalizeError(data.failedReason);
-                this.store.upsertErrorGroup(
-                  queueName,
-                  signature,
-                  data.failedReason,
-                  jobId,
-                );
+              try {
+                this.store.insertEvent(event);
+
+                if (eventType === 'failed' && data.failedReason) {
+                  const signature = this.normalizeError(data.failedReason);
+                  this.store.upsertErrorGroup(
+                    queueName,
+                    signature,
+                    data.failedReason,
+                    jobId,
+                  );
+                }
+
+                if (this.verbose) {
+                  console.log(`[event-stream] ${queueName}: ${eventType} job=${jobId}`);
+                }
+              } catch (err) {
+                console.error(`[event-stream] Failed to persist event:`, err);
               }
+            }
 
-              if (this.verbose) {
-                console.log(`[event-stream] ${queueName}: ${eventType} job=${jobId}`);
+            // Persist cursor after processing all entries for this queue
+            if (lastIdForQueue) {
+              try {
+                this.store.setStreamCursor(queueName, lastIdForQueue);
+              } catch (err) {
+                console.error(`[event-stream] Failed to persist cursor:`, err);
               }
-            } catch (err) {
-              console.error(`[event-stream] Failed to persist event:`, err);
             }
           }
         }
       } catch (err) {
-        if (!this.running) return; // shutting down
-
-        // Connection errors — wait and retry
+        if (!this.running) return;
         console.error('[event-stream] XREAD error:', err);
         await sleep(1000);
       }
     }
   }
 
+  private async xreadChunk(
+    queues: string[],
+  ): Promise<[string, [string, string[]][]][] | null> {
+    const streamKeys = queues.map((q) => `${this.prefix}:${q}:events`);
+    const streamIds = queues.map((q) => this.lastIds.get(q) ?? '0-0');
+
+    const results = await (this.redis.xread as Function)(
+      'BLOCK', 5000,
+      'COUNT', 100,
+      'STREAMS', ...streamKeys, ...streamIds,
+    ) as [string, [string, string[]][]][] | null;
+
+    return results;
+  }
+
+  private async hydrateJobNames(): Promise<void> {
+    const queues = this.discovery.getQueues();
+    let totalHydrated = 0;
+
+    for (const queue of queues) {
+      const jobIds = this.store.getUnhydratedEventJobIds(queue);
+      if (jobIds.length === 0) continue;
+
+      const pipeline = this.cmdRedis.pipeline();
+      for (const jobId of jobIds) {
+        pipeline.hget(`${this.prefix}:${queue}:${jobId}`, 'name');
+      }
+
+      const results = await pipeline.exec();
+      if (!results) continue;
+
+      const updates: { queue: string; jobId: string; jobName: string }[] = [];
+      for (let i = 0; i < jobIds.length; i++) {
+        const [err, name] = results[i]!;
+        const resolvedName = err ? '[error]' : ((name as string) || '[deleted]');
+        updates.push({ queue, jobId: jobIds[i]!, jobName: resolvedName });
+      }
+
+      this.store.batchUpdateJobNames(updates);
+      totalHydrated += updates.length;
+    }
+
+    if (this.verbose && totalHydrated > 0) {
+      console.log(`[event-stream] Hydrated ${totalHydrated} job names`);
+    }
+  }
+
   private extractQueueName(streamKey: string): string | null {
-    // Key format: {prefix}:{queueName}:events
     const prefixPart = `${this.prefix}:`;
     const suffix = ':events';
     if (streamKey.startsWith(prefixPart) && streamKey.endsWith(suffix)) {
@@ -177,7 +243,6 @@ export class EventStreamConsumer {
   }
 
   private streamIdToTimestamp(streamId: string): number {
-    // Stream IDs have format: <timestamp>-<sequence>
     const dashIdx = streamId.indexOf('-');
     if (dashIdx !== -1) {
       return parseInt(streamId.slice(0, dashIdx), 10);
@@ -199,4 +264,12 @@ export class EventStreamConsumer {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
 }
