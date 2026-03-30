@@ -11,9 +11,11 @@ const RANGE_MS: Record<Range, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
 };
 
+// All BullMQ v5 event types
 const EVENT_TYPES = [
   'completed', 'failed', 'added', 'waiting', 'active',
   'delayed', 'stalled', 'progress', 'removed', 'drained',
+  'error', 'duplicated', 'cleaned', 'paused', 'resumed',
 ];
 
 const eventTypeColors: Record<string, string> = {
@@ -27,6 +29,11 @@ const eventTypeColors: Record<string, string> = {
   progress: '#06b6d4',
   removed: '#ec4899',
   drained: '#64748b',
+  error: '#dc2626',
+  duplicated: '#a855f7',
+  cleaned: '#78716c',
+  paused: '#eab308',
+  resumed: '#84cc16',
 };
 
 const PAGE_SIZE = 50;

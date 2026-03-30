@@ -1159,9 +1159,11 @@ export class MetricsStore {
       tx();
     };
 
-    // 1-24h: keep only failed and stalled events, drop everything else
+    // 1-24h: keep only failed, stalled, and error events (per spec).
+    // BullMQ emits 'error' for queue-level errors (connection failures,
+    // Lua script errors) — critical for incident debugging.
     const tier1Events = this.db.prepare(
-      "SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ? AND ts >= ? AND event_type NOT IN ('failed', 'stalled')",
+      "SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ? AND ts >= ? AND event_type NOT IN ('failed', 'stalled', 'error')",
     ).all(oneHourAgo, oneDayAgo) as Record<string, unknown>[];
     deleteEventsWithFts(tier1Events);
 
