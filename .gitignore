@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.db
+.damasqas/
+ui/node_modules/
+ui/dist/
+*.tsbuildinfo
+.env
