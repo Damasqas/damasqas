@@ -654,7 +654,23 @@ export class MetricsStore {
 
   private cleanup(): void {
     const cutoff = Date.now() - this.retentionMs;
+
+    // Snapshots are collected at 1s intervals so they accumulate fast.
+    // Downsample: keep 1-second resolution for the last 1 hour,
+    // then only keep one snapshot per 10-second window for older data.
+    const downsampleCutoff = Date.now() - 60 * 60 * 1000; // 1 hour ago
+    this.db.exec(`
+      DELETE FROM snapshots
+      WHERE ts < ${downsampleCutoff}
+        AND id NOT IN (
+          SELECT MIN(id) FROM snapshots
+          WHERE ts < ${downsampleCutoff} AND ts >= ${cutoff}
+          GROUP BY queue, ts / 10000
+        )
+    `);
+    // Then delete anything older than the retention window entirely
     this.db.prepare('DELETE FROM snapshots WHERE ts < ?').run(cutoff);
+
     this.db.prepare('DELETE FROM metrics WHERE ts < ?').run(cutoff);
     this.db.prepare('DELETE FROM anomalies WHERE ts < ? AND resolved_at IS NOT NULL').run(cutoff);
 

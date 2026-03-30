@@ -27,7 +27,7 @@ program
   .requiredOption('--redis <url>', 'Redis connection URL')
   .option('--port <number>', 'Dashboard port', '3888')
   .option('--prefix <string>', 'BullMQ key prefix', 'bull')
-  .option('--poll-interval <seconds>', 'Metrics collection interval', '15')
+  .option('--poll-interval <seconds>', 'Snapshot collection interval', '1')
   .option('--discovery-interval <seconds>', 'Queue discovery interval', '60')
   .option('--retention-days <number>', 'How long to keep metrics', '30')
   .option('--slack-webhook <url>', 'Slack incoming webhook URL')
@@ -115,7 +115,8 @@ async function start(config: DamasqasConfig): Promise<void> {
 
   // Start cleanup & collection
   store.startCleanup();
-  console.log(`[damasqas] Collector running (every ${config.pollInterval}s, discovery every ${config.discoveryInterval}s)`);
+  const analysisInterval = Math.max(config.pollInterval, 10);
+  console.log(`[damasqas] Collector running (snapshots every ${config.pollInterval}s, analysis every ${analysisInterval}s, discovery every ${config.discoveryInterval}s)`);
 
   // Do initial collection
   await collector.collectAll(queues);

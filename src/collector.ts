@@ -5,6 +5,17 @@ import type { AnomalyDetector } from './anomaly.js';
 import type { AlertEngine } from './alert-engine.js';
 import type { QueueSnapshot, QueueMetrics } from './types.js';
 
+/**
+ * Unified polling loop. Runs at pollInterval (default 1s) and orchestrates:
+ *
+ *   Every tick:        Snapshot collection (batched pipeline)
+ *   Every Nth tick:    Metrics computation, anomaly detection, alert evaluation
+ *   Every Mth tick:    Queue discovery refresh
+ *
+ * This decoupling lets us collect snapshots at 1s resolution for real-time
+ * dashboards while keeping the heavier analytical work (rolling averages,
+ * SQLite scans) at a sustainable 10s cadence.
+ */
 export class Collector {
   private adapter: QueueAdapter;
   private store: MetricsStore;
@@ -17,6 +28,7 @@ export class Collector {
   private verbose: boolean;
   private tickCount = 0;
   private discoveryEveryNTicks: number;
+  private analysisEveryNTicks: number;
 
   constructor(
     adapter: QueueAdapter,
@@ -35,15 +47,21 @@ export class Collector {
     this.alertEngine = alertEngine;
     this.pollInterval = pollIntervalSeconds * 1000;
     this.verbose = verbose;
-    // Run discovery every Nth tick (default: every 4th tick at 15s = 60s)
+
+    // Discovery runs every M ticks (default: 60s / 1s = every 60th tick)
     this.discoveryEveryNTicks = Math.max(1, Math.round(discoveryIntervalSeconds / pollIntervalSeconds));
+
+    // Metrics/anomaly/alert analysis runs every N ticks.
+    // Target: ~10s cadence. If pollInterval >= 10s, run every tick.
+    const ANALYSIS_INTERVAL_SECONDS = 10;
+    this.analysisEveryNTicks = Math.max(1, Math.round(ANALYSIS_INTERVAL_SECONDS / pollIntervalSeconds));
   }
 
   async tick(): Promise<void> {
     this.tickCount++;
 
     try {
-      // 1. Queue discovery refresh (every Nth tick)
+      // 1. Queue discovery refresh (every Mth tick, default ~60s)
       if (this.tickCount % this.discoveryEveryNTicks === 0) {
         await this.discovery.scan();
         if (this.verbose) {
@@ -54,18 +72,16 @@ export class Collector {
       const queues = this.discovery.getQueues();
       if (queues.length === 0) return;
 
-      // 2. Batch all per-queue reads into a single pipeline
+      // 2. Batch all per-queue reads into a single pipeline (every tick)
       const snapshots = await this.adapter.getSnapshotBatch(queues);
 
-      // 3. Compute inline metrics and persist
+      // 3. Persist snapshots and compute inline throughput/fail rate
       for (const snapshot of snapshots) {
-        // Compute throughput/fail rate from previous snapshot
         const prev = this.previousSnapshots.get(snapshot.queue);
         if (prev) {
-          const metrics = this.computeMetrics(snapshot, prev);
-          snapshot.throughput1m = metrics.throughput;
-          snapshot.failRate1m = metrics.failureRate;
-          this.store.insertMetrics(metrics);
+          const delta = this.computeMetrics(snapshot, prev);
+          snapshot.throughput1m = delta.throughput;
+          snapshot.failRate1m = delta.failureRate;
         }
 
         this.store.insertSnapshot(snapshot);
@@ -80,19 +96,34 @@ export class Collector {
         }
       }
 
-      // 4. Run anomaly detection
-      try {
-        await this.anomalyDetector.detect(queues);
-      } catch (err) {
-        console.error('[collector] Anomaly detection error:', err);
-      }
+      // 4. Heavier analysis at a lower cadence (every Nth tick, default ~10s)
+      //    This includes metrics row insertion, anomaly detection (which scans
+      //    rolling averages over days of data), and alert rule evaluation.
+      if (this.tickCount % this.analysisEveryNTicks === 0) {
+        // Insert metrics rows (separate from snapshot — coarser granularity)
+        for (const snapshot of snapshots) {
+          const prev = this.previousSnapshots.get(snapshot.queue);
+          if (prev) {
+            // Recompute over the analysis window for more stable rates
+            const metrics = this.computeMetrics(snapshot, prev);
+            this.store.insertMetrics(metrics);
+          }
+        }
 
-      // 5. Evaluate alert rules
-      if (this.alertEngine) {
+        // Anomaly detection
         try {
-          await this.alertEngine.evaluate(queues, snapshots);
+          await this.anomalyDetector.detect(queues);
         } catch (err) {
-          console.error('[collector] Alert evaluation error:', err);
+          console.error('[collector] Anomaly detection error:', err);
+        }
+
+        // Alert rules evaluation
+        if (this.alertEngine) {
+          try {
+            await this.alertEngine.evaluate(queues, snapshots);
+          } catch (err) {
+            console.error('[collector] Alert evaluation error:', err);
+          }
         }
       }
     } catch (err) {
