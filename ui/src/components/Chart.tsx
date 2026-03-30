@@ -8,15 +8,52 @@ import {
   CartesianGrid,
 } from 'recharts';
 
+type Range = '1h' | '6h' | '24h' | '7d';
+
 interface ChartProps {
   data: Array<Record<string, unknown>>;
   dataKey: string;
   title: string;
   color?: string;
   baselineKey?: string;
+  domain?: [number, number];
+  range?: Range;
 }
 
-export function Chart({ data, dataKey, title, color = '#ff3333', baselineKey }: ChartProps) {
+function formatTick(ts: number, range?: Range): string {
+  const d = new Date(ts);
+  switch (range) {
+    case '7d':
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    case '24h':
+      return d.toLocaleTimeString('en-US', { hour: 'numeric' });
+    case '6h':
+    case '1h':
+    default:
+      return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+}
+
+function formatTooltipLabel(ts: number, range?: Range): string {
+  const d = new Date(ts);
+  if (range === '7d') {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+function getTickCount(range?: Range): number {
+  switch (range) {
+    case '7d': return 7;
+    case '24h': return 8;
+    case '6h': return 6;
+    case '1h': return 6;
+    default: return 6;
+  }
+}
+
+export function Chart({ data, dataKey, title, color = '#ff3333', baselineKey, domain, range }: ChartProps) {
   return (
     <div style={{
       background: 'rgba(255, 255, 255, 0.02)',
@@ -44,8 +81,13 @@ export function Chart({ data, dataKey, title, color = '#ff3333', baselineKey }: 
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
           <XAxis
             dataKey="time"
+            type="number"
+            scale="time"
+            domain={domain ?? ['dataMin', 'dataMax']}
             tick={{ fill: '#555', fontSize: 10 }}
             axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
+            tickFormatter={(ts: number) => formatTick(ts, range)}
+            tickCount={getTickCount(range)}
           />
           <YAxis
             tick={{ fill: '#555', fontSize: 10 }}
@@ -58,6 +100,7 @@ export function Chart({ data, dataKey, title, color = '#ff3333', baselineKey }: 
               borderRadius: 8,
               fontSize: 12,
             }}
+            labelFormatter={(ts: number) => formatTooltipLabel(ts, range)}
           />
           {baselineKey && (
             <Area

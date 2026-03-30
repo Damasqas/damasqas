@@ -259,6 +259,34 @@ export class MetricsStore {
     return rows.map((r) => this.rowToSnapshot(r));
   }
 
+  getSnapshotsAggregated(queue: string, since: number, until: number, bucketMs: number): QueueSnapshot[] {
+    const rows = this.db.prepare(`
+      SELECT
+        (ts / ?) * ? AS ts,
+        AVG(waiting) AS waiting,
+        AVG(active) AS active,
+        AVG(completed) AS completed,
+        AVG(failed) AS failed,
+        AVG(delayed) AS delayed,
+        MAX(locks) AS locks,
+        MAX(stalled) AS stalled,
+        MAX(oldest_waiting_age) AS oldest_waiting_age,
+        MAX(paused) AS paused,
+        AVG(prioritized) AS prioritized,
+        AVG(waiting_children) AS waiting_children,
+        AVG(throughput_1m) AS throughput_1m,
+        AVG(fail_rate_1m) AS fail_rate_1m,
+        AVG(avg_process_ms) AS avg_process_ms,
+        AVG(avg_wait_ms) AS avg_wait_ms
+      FROM snapshots
+      WHERE queue = ? AND ts >= ? AND ts <= ?
+      GROUP BY ts / ?
+      ORDER BY ts ASC
+    `).all(bucketMs, bucketMs, queue, since, until, bucketMs) as Record<string, unknown>[];
+
+    return rows.map((r) => this.rowToSnapshot({ ...r, queue }));
+  }
+
   hasData(queue: string): boolean {
     const row = this.db.prepare(
       'SELECT 1 FROM snapshots WHERE queue = ? LIMIT 1',
@@ -291,6 +319,31 @@ export class MetricsStore {
 
     return rows.map((r) => ({
       queue: r.queue as string,
+      timestamp: r.ts as number,
+      throughput: r.throughput as number,
+      failureRate: r.failure_rate as number,
+      failureRatio: 0,
+      avgProcessingMs: r.avg_processing_ms as number | null,
+      backlogGrowthRate: r.backlog_growth as number,
+    }));
+  }
+
+  getMetricsAggregated(queue: string, since: number, until: number, bucketMs: number): QueueMetrics[] {
+    const rows = this.db.prepare(`
+      SELECT
+        (ts / ?) * ? AS ts,
+        AVG(throughput) AS throughput,
+        AVG(failure_rate) AS failure_rate,
+        AVG(avg_processing_ms) AS avg_processing_ms,
+        AVG(backlog_growth) AS backlog_growth
+      FROM metrics
+      WHERE queue = ? AND ts >= ? AND ts <= ?
+      GROUP BY ts / ?
+      ORDER BY ts ASC
+    `).all(bucketMs, bucketMs, queue, since, until, bucketMs) as Record<string, unknown>[];
+
+    return rows.map((r) => ({
+      queue,
       timestamp: r.ts as number,
       throughput: r.throughput as number,
       failureRate: r.failure_rate as number,

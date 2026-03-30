@@ -8,6 +8,13 @@ const RANGES: Record<string, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
 };
 
+const BUCKET_MS: Record<string, number | null> = {
+  '1h': null,                  // raw data (~360 points)
+  '6h': null,                  // raw data (~2160 points)
+  '24h': 5 * 60 * 1000,       // 5-min buckets => ~288 points
+  '7d': 30 * 60 * 1000,       // 30-min buckets => ~336 points
+};
+
 export function metricsRoutes(store: MetricsStore): Router {
   const router = Router();
 
@@ -24,11 +31,16 @@ export function metricsRoutes(store: MetricsStore): Router {
 
       const now = Date.now();
       const since = now - rangeMs;
+      const bucketMs = BUCKET_MS[rangeKey] ?? null;
 
-      const snapshots = store.getSnapshots(name, since, now);
-      const metrics = store.getMetrics(name, since, now);
+      const snapshots = bucketMs
+        ? store.getSnapshotsAggregated(name, since, now, bucketMs)
+        : store.getSnapshots(name, since, now);
+      const metrics = bucketMs
+        ? store.getMetricsAggregated(name, since, now, bucketMs)
+        : store.getMetrics(name, since, now);
 
-      res.json({ snapshots, metrics });
+      res.json({ snapshots, metrics, since, until: now });
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch metrics' });
     }
