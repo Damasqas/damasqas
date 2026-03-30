@@ -13,14 +13,12 @@ interface QueueDetailProps {
 
 type Range = '1h' | '6h' | '24h' | '7d';
 
-function formatTime(timestamp: number, range: Range): string {
-  const d = new Date(timestamp);
-  if (range === '7d') {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  }
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-}
+const RANGE_MS: Record<Range, number> = {
+  '1h': 60 * 60 * 1000,
+  '6h': 6 * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+};
 
 export function QueueDetail({ queue }: QueueDetailProps) {
   const { data: queueData } = useQueue(queue);
@@ -40,15 +38,19 @@ export function QueueDetail({ queue }: QueueDetailProps) {
   const metrics = metricsData?.metrics || [];
   const snapshots = metricsData?.snapshots || [];
 
+  const now = Date.now();
+  const since = metricsData?.since ?? (now - RANGE_MS[range]);
+  const until = metricsData?.until ?? now;
+
   const chartData = metrics.map((m) => ({
-    time: formatTime(m.timestamp, range),
+    time: m.timestamp,
     throughput: m.throughput,
     failures: m.failureRate,
     processingTime: m.avgProcessingMs,
   }));
 
   const waitingData = snapshots.map((s) => ({
-    time: formatTime(s.timestamp, range),
+    time: s.timestamp,
     waiting: s.waiting,
     active: s.active,
   }));
@@ -145,10 +147,10 @@ export function QueueDetail({ queue }: QueueDetailProps) {
         gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
         gap: 16,
       }}>
-        <Chart data={chartData} dataKey="throughput" title="Throughput (jobs/min)" color="#22c55e" />
-        <Chart data={chartData} dataKey="failures" title="Failures (failures/min)" color="#ff3333" />
-        <Chart data={waitingData} dataKey="waiting" title="Waiting Jobs" color="#f59e0b" />
-        <Chart data={waitingData} dataKey="active" title="Active Jobs" color="#3b82f6" />
+        <Chart data={chartData} dataKey="throughput" title="Throughput (jobs/min)" color="#22c55e" domain={[since, until]} range={range} />
+        <Chart data={chartData} dataKey="failures" title="Failures (failures/min)" color="#ff3333" domain={[since, until]} range={range} />
+        <Chart data={waitingData} dataKey="waiting" title="Waiting Jobs" color="#f59e0b" domain={[since, until]} range={range} />
+        <Chart data={waitingData} dataKey="active" title="Active Jobs" color="#3b82f6" domain={[since, until]} range={range} />
       </div>
     </div>
   );

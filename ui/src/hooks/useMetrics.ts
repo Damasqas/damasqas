@@ -25,7 +25,7 @@ export interface Metric {
 }
 
 export function useMetrics(queue: string, range: '1h' | '6h' | '24h' | '7d' = '1h') {
-  return useQuery<{ snapshots: Snapshot[]; metrics: Metric[] }>({
+  return useQuery<{ snapshots: Snapshot[]; metrics: Metric[]; since: number; until: number }>({
     queryKey: ['metrics', queue, range],
     queryFn: () =>
       fetch(`/api/queues/${encodeURIComponent(queue)}/metrics?range=${range}`).then((r) =>
