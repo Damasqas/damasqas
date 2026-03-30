@@ -223,12 +223,16 @@ app.get("/", (req, res) => {
         // Update badge
         const badge = el('badge-'+queue);
         if (badge) {
-          const hasChaos = chaos.failureRate > 0.05 || chaos.slowdownFactor > 1;
-          if (hasChaos) {
-            badge.textContent = 'CHAOS';
+          const baselineRate = info.baseline?.failureRate || 0;
+          const elevated = chaos.failureRate > baselineRate + 0.01 || chaos.slowdownFactor > 1;
+          if (elevated && producer?.running) {
+            badge.textContent = 'DEGRADED';
+            badge.className = 'card-badge badge-chaos';
+          } else if (elevated) {
+            badge.textContent = 'FAULTS ON';
             badge.className = 'card-badge badge-chaos';
           } else if (producer?.running) {
-            badge.textContent = 'RUNNING';
+            badge.textContent = 'PRODUCING';
             badge.className = 'card-badge badge-running';
           } else {
             badge.textContent = 'IDLE';
@@ -446,10 +450,12 @@ app.get("/status", async (req, res) => {
       ? await q.getJobCounts("waiting", "active", "completed", "failed", "delayed")
       : { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
 
+    const qConfig = QUEUE_CONFIGS[queue as keyof typeof QUEUE_CONFIGS];
     status[queue] = {
       chaos: chaosConfig,
       counts,
       producer: producerStates[queue] || { running: false, jobsPerMinute: 0 },
+      baseline: { failureRate: qConfig.baselineFailureRate },
     };
   }
   res.json(status);
