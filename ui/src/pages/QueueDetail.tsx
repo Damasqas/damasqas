@@ -5,6 +5,7 @@ import { useRetryAll } from '../hooks/useJobs';
 import { useToast } from '../components/Toast';
 import { StatCard } from '../components/StatCard';
 import { Chart } from '../components/Chart';
+import { CapacityPanel } from '../components/CapacityPanel';
 
 interface QueueDetailProps {
   queue: string;
@@ -131,6 +132,8 @@ export function QueueDetail({ queue }: QueueDetailProps) {
         <StatCard label="Stalled" value={q.processors.stalled} critical={q.processors.stalled > 0} />
         <StatCard label="Overdue Delayed" value={q.overdueDelayed || 0} critical={(q.overdueDelayed || 0) > 0} />
       </div>
+
+      <CapacityPanel queue={q} snapshots={snapshots} />
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         {(['1h', '6h', '24h', '7d'] as const).map((r) => (

@@ -26,6 +26,17 @@ export interface QueueState {
     currentValue: number;
     baselineValue: number;
   }>;
+  drain: {
+    queue: string;
+    currentDepth: number;
+    depthDelta: number;
+    inflowRate: number;
+    drainRate: number;
+    netRate: number;
+    projectedDrainMinutes: number | null;
+    capacityDeficit: number;
+    trend: 'draining' | 'stable' | 'growing' | 'stalled';
+  } | null;
 }
 
 export function useQueues() {

@@ -2,12 +2,14 @@ import { Router } from 'express';
 import type { Discovery } from '../discovery.js';
 import type { MetricsStore } from '../store.js';
 import type { QueueAdapter } from '../adapters/types.js';
+import type { Collector } from '../collector.js';
 import type { QueueState } from '../types.js';
 
 export function queueRoutes(
   discovery: Discovery,
   store: MetricsStore,
   adapter: QueueAdapter,
+  collector?: Collector,
 ): Router {
   const router = Router();
 
@@ -17,7 +19,7 @@ export function queueRoutes(
       const queues: (QueueState & { stale: boolean })[] = [];
 
       for (const name of names) {
-        const state = await buildQueueState(name, store, adapter);
+        const state = await buildQueueState(name, store, adapter, collector);
         queues.push({
           ...state,
           stale: discovery.isStale(name),
@@ -39,13 +41,29 @@ export function queueRoutes(
         return;
       }
 
-      const state = await buildQueueState(name, store, adapter);
+      const state = await buildQueueState(name, store, adapter, collector);
       res.json({
         ...state,
         stale: discovery.isStale(name),
       });
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch queue' });
+    }
+  });
+
+  router.get('/queues/:name/drain', async (req, res) => {
+    try {
+      const name = req.params.name!;
+      const knownQueues = discovery.getQueues();
+      if (!knownQueues.includes(name)) {
+        res.status(404).json({ error: 'Queue not found' });
+        return;
+      }
+
+      const drain = collector?.getDrainAnalysis(name) ?? null;
+      res.json({ queue: name, drain });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch drain analysis' });
     }
   });
 
@@ -73,6 +91,7 @@ async function buildQueueState(
   name: string,
   store: MetricsStore,
   adapter: QueueAdapter,
+  collector?: Collector,
 ): Promise<QueueState> {
   const snapshot = store.getLatestSnapshot(name);
   const metrics = store.getLatestMetrics(name);
@@ -112,5 +131,6 @@ async function buildQueueState(
     },
     overdueDelayed: snapshot?.overdueDelayed ?? 0,
     anomalies,
+    drain: collector?.getDrainAnalysis(name) ?? null,
   };
 }

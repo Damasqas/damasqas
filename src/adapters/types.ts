@@ -51,6 +51,10 @@ export interface QueueAdapter {
   getOverdueDelayedJobs(queue: string, limit?: number): Promise<OverdueDelayedJob[]>;
   promoteAllOverdue(queue: string, limit?: number): Promise<number>;
 
+  // BullMQ built-in metrics
+  checkBullMQMetrics(queues: string[]): Promise<void>;
+  getBullMQThroughput(queue: string): Promise<{ completed: number; failed: number } | null>;
+
   // Clock skew
   checkClockSkew(): Promise<void>;
 
