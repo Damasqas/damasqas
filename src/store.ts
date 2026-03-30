@@ -1151,22 +1151,22 @@ export class MetricsStore {
       tx();
     };
 
-    // 1-24h: drop high-volume non-error events
+    // 1-24h: keep only failed and stalled events, drop everything else
     const tier1Events = this.db.prepare(
-      "SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ? AND ts >= ? AND event_type IN ('completed', 'active', 'added', 'waiting', 'progress')",
+      "SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ? AND ts >= ? AND event_type NOT IN ('failed', 'stalled')",
     ).all(oneHourAgo, oneDayAgo) as Record<string, unknown>[];
     deleteEventsWithFts(tier1Events);
 
-    // 1-7d: drop everything except failed and stalled
+    // 1-7d: keep only failed and stalled events
     const tier2Events = this.db.prepare(
       "SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ? AND ts >= ? AND event_type NOT IN ('failed', 'stalled')",
     ).all(oneDayAgo, sevenDaysAgo) as Record<string, unknown>[];
     deleteEventsWithFts(tier2Events);
 
-    // Beyond retention: delete all remaining events
+    // 7+ days: delete all events (aggregated counts live in snapshots table)
     const oldEvents = this.db.prepare(
       'SELECT id, job_id, job_name, queue, event_type, data FROM events WHERE ts < ?',
-    ).all(cutoff) as Record<string, unknown>[];
+    ).all(sevenDaysAgo) as Record<string, unknown>[];
     deleteEventsWithFts(oldEvents);
 
     this.db.prepare('DELETE FROM alert_fires WHERE ts < ?').run(cutoff);
