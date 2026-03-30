@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useEvents, useEventSearch, type EventRecord } from '../hooks/useEvents';
 import { useQueues } from '../hooks/useQueues';
 
@@ -38,15 +38,39 @@ const eventTypeColors: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
+/** Debounce a value — returns the latest value after `delay` ms of inactivity. */
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
+
 export function EventTimeline() {
   const [range, setRange] = useState<Range>('1h');
   const [queueFilter, setQueueFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
-  const [jobNameFilter, setJobNameFilter] = useState('');
+  const [jobNameInput, setJobNameInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [offset, setOffset] = useState(0);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  // Debounce job name input to avoid firing on every keystroke.
+  // The API does exact match, so partial strings return nothing anyway —
+  // debouncing prevents wasted requests during typing.
+  const debouncedJobName = useDebouncedValue(jobNameInput, 400);
+
+  // Reset offset when the debounced job name changes
+  const prevJobName = useRef(debouncedJobName);
+  useEffect(() => {
+    if (prevJobName.current !== debouncedJobName) {
+      prevJobName.current = debouncedJobName;
+      setOffset(0);
+    }
+  }, [debouncedJobName]);
 
   const { data: queuesData } = useQueues();
   const queueNames = useMemo(
@@ -54,15 +78,16 @@ export function EventTimeline() {
     [queuesData],
   );
 
-  const since = useMemo(() => Date.now() - RANGE_MS[range], [range]);
-
+  // `since` is computed fresh inside the queryFn on every fetch (including
+  // refetchInterval ticks) so the sliding window stays accurate. We pass
+  // rangeMs instead of a frozen timestamp. See useEvents for details.
   const { data: eventsData, isLoading } = useEvents({
-    since,
+    rangeMs: RANGE_MS[range],
     limit: PAGE_SIZE,
     offset,
     queue: queueFilter || undefined,
     type: typeFilter || undefined,
-    jobName: jobNameFilter || undefined,
+    jobName: debouncedJobName || undefined,
   });
 
   const { data: searchData } = useEventSearch(searchQuery);
@@ -137,8 +162,8 @@ export function EventTimeline() {
         <input
           type="text"
           placeholder="Filter by job name..."
-          value={jobNameFilter}
-          onChange={(e) => { setJobNameFilter(e.target.value); resetPagination(); }}
+          value={jobNameInput}
+          onChange={(e) => setJobNameInput(e.target.value)}
           style={inputStyle}
         />
 
@@ -264,6 +289,12 @@ export function EventTimeline() {
   );
 }
 
+const cellOverflow: React.CSSProperties = {
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
 function EventRow({ event, expanded, onToggle }: {
   event: EventRecord;
   expanded: boolean;
@@ -296,8 +327,9 @@ function EventRow({ event, expanded, onToggle }: {
         gap: 12,
         padding: '10px 16px',
         alignItems: 'center',
+        minWidth: 0,
       }}>
-        <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 12, color: '#999' }}>
+        <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 12, color: '#999', ...cellOverflow }}>
           {ts.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
           <span style={{ color: '#555', marginLeft: 4, fontSize: 10 }}>
             {ts.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
@@ -311,17 +343,23 @@ function EventRow({ event, expanded, onToggle }: {
             background: `${color}15`,
             padding: '2px 8px',
             borderRadius: 6,
+            display: 'inline-block',
           }}>
             {event.eventType}
           </span>
         </div>
-        <div style={{ fontSize: 12, color: '#ccc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontSize: 12, color: '#ccc', ...cellOverflow }}>
           {event.queue}
         </div>
-        <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 12, color: '#888' }}>
+        <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 12, color: '#888', ...cellOverflow }}>
           {event.jobId || '—'}
         </div>
-        <div style={{ fontSize: 12, color: event.jobName === '[deleted]' ? '#555' : '#aaa', fontStyle: event.jobName === '[deleted]' ? 'italic' : 'normal' }}>
+        <div style={{
+          fontSize: 12,
+          color: event.jobName === '[deleted]' ? '#555' : '#aaa',
+          fontStyle: event.jobName === '[deleted]' ? 'italic' : 'normal',
+          ...cellOverflow,
+        }}>
           {event.jobName || '—'}
         </div>
       </div>

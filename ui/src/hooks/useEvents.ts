@@ -18,8 +18,8 @@ export interface EventsResponse {
 }
 
 export interface EventsParams {
-  since?: number;
-  until?: number;
+  /** Time range in ms — since is computed fresh at fetch time as Date.now() - rangeMs */
+  rangeMs: number;
   limit?: number;
   offset?: number;
   queue?: string;
@@ -27,19 +27,27 @@ export interface EventsParams {
   jobName?: string;
 }
 
+/**
+ * Fetches paginated events with a sliding time window.
+ *
+ * IMPORTANT: `since` is computed inside the queryFn (not memoized in the
+ * component) so that refetchInterval always uses a fresh window.
+ * The queryKey is based on the stable rangeMs value, not a timestamp,
+ * so React Query correctly deduplicates and refetches the same entry.
+ */
 export function useEvents(params: EventsParams) {
-  const qs = new URLSearchParams();
-  if (params.since) qs.set('since', String(params.since));
-  if (params.until) qs.set('until', String(params.until));
-  if (params.limit) qs.set('limit', String(params.limit));
-  if (params.offset) qs.set('offset', String(params.offset));
-  if (params.queue) qs.set('queue', params.queue);
-  if (params.type) qs.set('type', params.type);
-  if (params.jobName) qs.set('job_name', params.jobName);
-
   return useQuery<EventsResponse>({
-    queryKey: ['events', params],
-    queryFn: () => fetch(`/api/events?${qs.toString()}`).then((r) => r.json()),
+    queryKey: ['events', params.rangeMs, params.limit, params.offset, params.queue, params.type, params.jobName],
+    queryFn: () => {
+      const qs = new URLSearchParams();
+      qs.set('since', String(Date.now() - params.rangeMs));
+      if (params.limit) qs.set('limit', String(params.limit));
+      if (params.offset) qs.set('offset', String(params.offset));
+      if (params.queue) qs.set('queue', params.queue);
+      if (params.type) qs.set('type', params.type);
+      if (params.jobName) qs.set('job_name', params.jobName);
+      return fetch(`/api/events?${qs.toString()}`).then((r) => r.json());
+    },
     refetchInterval: 5000,
   });
 }
