@@ -66,13 +66,13 @@ export class BullMQAdapter implements QueueAdapter {
     const now = Date.now();
 
     const pipeline = this.cmd.pipeline();
-    pipeline.llen(key('waiting'));           // 0
+    pipeline.llen(key('wait'));           // 0
     pipeline.llen(key('active'));            // 1
     pipeline.zcard(key('completed'));        // 2
     pipeline.zcard(key('failed'));           // 3
     pipeline.zcard(key('delayed'));          // 4
     pipeline.hget(key('meta'), 'paused');    // 5
-    pipeline.lindex(key('waiting'), -1);     // 6: oldest waiting job ID
+    pipeline.lindex(key('wait'), -1);     // 6: oldest waiting job ID
     pipeline.zcard(key('prioritized'));      // 7
     pipeline.llen(key('waiting-children')); // 8
 
@@ -154,13 +154,13 @@ export class BullMQAdapter implements QueueAdapter {
     const p1 = this.cmd.pipeline();
     for (const queue of queues) {
       const key = (suffix: string) => `${this.prefix}:${queue}:${suffix}`;
-      p1.llen(key('waiting'));           // 0
+      p1.llen(key('wait'));           // 0
       p1.llen(key('active'));            // 1
       p1.zcard(key('completed'));        // 2
       p1.zcard(key('failed'));           // 3
       p1.zcard(key('delayed'));          // 4
       p1.hget(key('meta'), 'paused');    // 5
-      p1.lindex(key('waiting'), -1);     // 6
+      p1.lindex(key('wait'), -1);     // 6
       p1.zcard(key('prioritized'));      // 7
       p1.llen(key('waiting-children')); // 8
     }
@@ -452,7 +452,9 @@ export class BullMQAdapter implements QueueAdapter {
     limit: number,
     offset: number,
   ): Promise<JobDetail[]> {
-    const key = `${this.prefix}:${queue}:${status}`;
+    // BullMQ uses 'wait' as the key name, not 'waiting'
+    const keyName = status === 'waiting' ? 'wait' : status;
+    const key = `${this.prefix}:${queue}:${keyName}`;
     let jobIds: string[];
 
     if (status === 'waiting' || status === 'active') {
