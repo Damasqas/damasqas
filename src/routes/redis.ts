@@ -10,31 +10,7 @@ export function redisRoutes(
 ): Router {
   const router = Router();
 
-  // Legacy endpoint — kept for backward compatibility
-  router.get('/redis', async (_req, res) => {
-    try {
-      const redis = adapter.getCmdConnection();
-      const info = await redis.info();
-      const parsed = parseRedisInfo(info);
-
-      res.json({
-        version: parsed['redis_version'] || 'unknown',
-        memory: {
-          used: parsed['used_memory_human'] || 'unknown',
-          peak: parsed['used_memory_peak_human'] || 'unknown',
-          usedBytes: parseInt(parsed['used_memory'] || '0', 10),
-        },
-        clients: {
-          connected: parseInt(parsed['connected_clients'] || '0', 10),
-        },
-        uptime: parseInt(parsed['uptime_in_seconds'] || '0', 10),
-      });
-    } catch {
-      res.status(500).json({ error: 'Failed to fetch Redis info' });
-    }
-  });
-
-  // ── New Redis Health Endpoints ─────────────────────────────────────
+  // ── Redis Health Endpoints ─────────────────────────────────────────
 
   /**
    * GET /api/redis/health
@@ -134,30 +110,9 @@ export function redisRoutes(
   });
 
   /**
-   * GET /api/redis/key-sizes
-   * Returns the latest key sizes per queue with growth deltas.
-   */
-  router.get('/redis/key-sizes', (_req, res) => {
-    try {
-      const currentSizes = store.getLatestKeySizes();
-      const previousSizes = currentSizes.length > 0
-        ? store.getPreviousKeySizes(currentSizes[0]!.ts)
-        : [];
-      const growth = redisHealthCollector.attributeGrowth(currentSizes, previousSizes);
-
-      res.json({
-        keySizes: currentSizes,
-        growth,
-        collectedAt: currentSizes.length > 0 ? currentSizes[0]!.ts : null,
-      });
-    } catch {
-      res.status(500).json({ error: 'Failed to fetch key sizes' });
-    }
-  });
-
-  /**
    * GET /api/redis/key-sizes/history?queue=X&range=1h|6h|24h|7d
    * Returns key size time series for a specific queue.
+   * NOTE: Registered before /redis/key-sizes to avoid path prefix matching.
    */
   router.get('/redis/key-sizes/history', (req, res) => {
     try {
@@ -195,6 +150,28 @@ export function redisRoutes(
   });
 
   /**
+   * GET /api/redis/key-sizes
+   * Returns the latest key sizes per queue with growth deltas.
+   */
+  router.get('/redis/key-sizes', (_req, res) => {
+    try {
+      const currentSizes = store.getLatestKeySizes();
+      const previousSizes = currentSizes.length > 0
+        ? store.getPreviousKeySizes(currentSizes[0]!.ts)
+        : [];
+      const growth = redisHealthCollector.attributeGrowth(currentSizes, previousSizes);
+
+      res.json({
+        keySizes: currentSizes,
+        growth,
+        collectedAt: currentSizes.length > 0 ? currentSizes[0]!.ts : null,
+      });
+    } catch {
+      res.status(500).json({ error: 'Failed to fetch key sizes' });
+    }
+  });
+
+  /**
    * GET /api/redis/slowlog
    * Returns recent slowlog entries.
    */
@@ -205,6 +182,33 @@ export function redisRoutes(
       res.json({ entries });
     } catch {
       res.status(500).json({ error: 'Failed to fetch slowlog' });
+    }
+  });
+
+  /**
+   * GET /api/redis
+   * Legacy endpoint — basic Redis info for backward compatibility.
+   */
+  router.get('/redis', async (_req, res) => {
+    try {
+      const redis = adapter.getCmdConnection();
+      const info = await redis.info();
+      const parsed = parseRedisInfo(info);
+
+      res.json({
+        version: parsed['redis_version'] || 'unknown',
+        memory: {
+          used: parsed['used_memory_human'] || 'unknown',
+          peak: parsed['used_memory_peak_human'] || 'unknown',
+          usedBytes: parseInt(parsed['used_memory'] || '0', 10),
+        },
+        clients: {
+          connected: parseInt(parsed['connected_clients'] || '0', 10),
+        },
+        uptime: parseInt(parsed['uptime_in_seconds'] || '0', 10),
+      });
+    } catch {
+      res.status(500).json({ error: 'Failed to fetch Redis info' });
     }
   });
 
