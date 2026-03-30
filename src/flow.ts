@@ -11,9 +11,9 @@ const WAITING_CHILDREN_SCAN_LIMIT = 100;
  *
  * Flow relationships are stored across Redis keys:
  *   - Job hash field `parentKey`: the Redis key of the parent job
- *   - `bull:<queue>:<jobId>:dependencies`: pending child job keys (SMEMBERS)
- *   - `bull:<queue>:<jobId>:processed`: completed child job keys (SMEMBERS)
- *   - `bull:<queue>:<jobId>:failed`: failed child job keys (SMEMBERS)
+ *   - `bull:<queue>:<jobId>:dependencies`: pending child job keys (SET)
+ *   - `bull:<queue>:<jobId>:processed`: completed child job keys (HASH: key→returnvalue)
+ *   - `bull:<queue>:<jobId>:failed`: failed child job keys (HASH: key→failedReason)
  *
  * This class uses the adapter's cmd (read) connection directly since flow
  * inspection cross-cuts queues.
@@ -43,8 +43,7 @@ export class FlowInspector {
    */
   async getFlowTree(queue: string, jobId: string): Promise<FlowNode> {
     const root = await this.findFlowRoot(queue, jobId);
-    let nodeCount = 0;
-    const tree = await this.buildChildTree(root.queue, root.jobId, 0, { count: nodeCount });
+    const tree = await this.buildChildTree(root.queue, root.jobId, 0, { count: 0 }, new Set());
     return tree;
   }
 
@@ -60,9 +59,9 @@ export class FlowInspector {
     const p = this.cmd.pipeline();
     for (const id of ids) {
       p.hmget(`${this.prefix}:${queue}:${id}`, 'name', 'timestamp');
-      p.scard(`${this.prefix}:${queue}:${id}:dependencies`);
-      p.scard(`${this.prefix}:${queue}:${id}:processed`);
-      p.scard(`${this.prefix}:${queue}:${id}:failed`);
+      p.scard(`${this.prefix}:${queue}:${id}:dependencies`);   // SET
+      p.hlen(`${this.prefix}:${queue}:${id}:processed`);       // HASH
+      p.hlen(`${this.prefix}:${queue}:${id}:failed`);           // HASH
     }
     const results = await p.exec();
     if (!results) return [];
@@ -213,8 +212,13 @@ export class FlowInspector {
   ): Promise<{ queue: string; jobId: string }> {
     let currentQueue = queue;
     let currentJobId = jobId;
+    const visited = new Set<string>();
 
     for (let i = 0; i < MAX_PARENT_WALK; i++) {
+      const visitKey = `${currentQueue}:${currentJobId}`;
+      if (visited.has(visitKey)) break; // cycle in parent chain
+      visited.add(visitKey);
+
       const parentKey = await this.cmd.hget(
         `${this.prefix}:${currentQueue}:${currentJobId}`,
         'parentKey',
@@ -240,8 +244,15 @@ export class FlowInspector {
     jobId: string,
     depth: number,
     counter: { count: number },
+    visited: Set<string>,
   ): Promise<FlowNode> {
     counter.count++;
+
+    const visitKey = `${queue}:${jobId}`;
+    if (visited.has(visitKey)) {
+      return makeUnknownNode(jobId, queue); // cycle detected
+    }
+    visited.add(visitKey);
 
     if (depth >= MAX_TREE_DEPTH || counter.count >= MAX_TREE_NODES) {
       return {
@@ -258,13 +269,13 @@ export class FlowInspector {
       };
     }
 
-    // Pipeline: get job hash + 3 dependency sets + state
+    // Pipeline: get job hash + dependency keys + state
     const jobKey = `${this.prefix}:${queue}:${jobId}`;
     const p = this.cmd.pipeline();
     p.hgetall(jobKey);
-    p.smembers(`${jobKey}:dependencies`);
-    p.smembers(`${jobKey}:processed`);
-    p.smembers(`${jobKey}:failed`);
+    p.smembers(`${jobKey}:dependencies`);         // SET
+    p.hkeys(`${jobKey}:processed`);               // HASH → keys only
+    p.hkeys(`${jobKey}:failed`);                  // HASH → keys only
     // State determination commands
     p.zscore(`${this.prefix}:${queue}:completed`, jobId);       // 4
     p.zscore(`${this.prefix}:${queue}:failed`, jobId);          // 5
@@ -314,7 +325,7 @@ export class FlowInspector {
         });
         break;
       }
-      children.push(await this.buildChildTree(parsed.queue, parsed.jobId, depth + 1, counter));
+      children.push(await this.buildChildTree(parsed.queue, parsed.jobId, depth + 1, counter, visited));
     }
 
     const isLeaf = children.length === 0;
