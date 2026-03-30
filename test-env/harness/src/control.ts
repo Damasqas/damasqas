@@ -339,14 +339,18 @@ app.post("/reset/:queue", async (req, res) => {
   res.json({ queue, status: "normal" });
 });
 
-app.post("/reset-all", async (req, res) => {
+export async function resetAllChaos() {
   for (const [queue, config] of Object.entries(QUEUE_CONFIGS)) {
     await redis.set(`chaos:${queue}`, JSON.stringify({
       failureRate: config.baselineFailureRate,
       slowdownFactor: 1,
     }));
   }
-  console.log("[chaos] All queues reset to normal");
+  console.log("[chaos] All queues reset to baseline");
+}
+
+app.post("/reset-all", async (req, res) => {
+  await resetAllChaos();
   res.json({ status: "all normal" });
 });
 
