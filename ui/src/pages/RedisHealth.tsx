@@ -294,26 +294,27 @@ export function RedisHealth() {
         )}
       </div>
 
-      {/* Key Growth Contributors & Slowlog side by side */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: growth.length > 0 ? '1fr 1fr' : '1fr',
-        gap: 24,
-        marginBottom: 24,
-      }}>
-        {/* Top Growth Contributors */}
-        {growth.length > 0 && (
-          <GrowthTable growth={growth} />
-        )}
-
-        {/* Key Sizes Breakdown */}
-        {keySizeData && keySizeData.keySizes.length > 0 && (
-          <KeySizeTable
-            keySizes={keySizeData.keySizes}
-            collectedAt={keySizeData.collectedAt}
-          />
-        )}
-      </div>
+      {/* Key Growth Contributors & Key Sizes */}
+      {(growth.length > 0 || (keySizeData && keySizeData.keySizes.length > 0)) && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: growth.length > 0 && keySizeData && keySizeData.keySizes.length > 0
+            ? '1fr 1fr'
+            : '1fr',
+          gap: 24,
+          marginBottom: 24,
+        }}>
+          {growth.length > 0 && (
+            <GrowthTable growth={growth} />
+          )}
+          {keySizeData && keySizeData.keySizes.length > 0 && (
+            <KeySizeTable
+              keySizes={keySizeData.keySizes}
+              collectedAt={keySizeData.collectedAt}
+            />
+          )}
+        </div>
+      )}
 
       {/* Slowlog Table */}
       {slowlogData && slowlogData.entries.length > 0 && (
@@ -351,8 +352,8 @@ function GrowthTable({ growth }: { growth: KeyGrowth[] }) {
           </tr>
         </thead>
         <tbody>
-          {growth.slice(0, 10).map((g, i) => (
-            <Fragment key={i}>
+          {growth.slice(0, 10).map((g) => (
+            <Fragment key={`${g.queue}:${g.keyType}`}>
             <tr style={{ borderBottom: g.recommendation ? 'none' : '1px solid rgba(255,255,255,0.04)' }}>
               <td style={tdStyle}>
                 <span style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{g.queue}</span>
