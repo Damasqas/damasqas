@@ -30,6 +30,11 @@ export class Collector {
   private discoveryEveryNTicks: number;
   private analysisEveryNTicks: number;
 
+  // Separate map to track the snapshot used as the basis for the last
+  // metrics row. This prevents the bug where previousSnapshots gets
+  // overwritten every tick but metrics only compute every Nth tick.
+  private lastAnalysisSnapshots = new Map<string, QueueSnapshot>();
+
   constructor(
     adapter: QueueAdapter,
     store: MetricsStore,
@@ -55,6 +60,10 @@ export class Collector {
     // Target: ~10s cadence. If pollInterval >= 10s, run every tick.
     const ANALYSIS_INTERVAL_SECONDS = 10;
     this.analysisEveryNTicks = Math.max(1, Math.round(ANALYSIS_INTERVAL_SECONDS / pollIntervalSeconds));
+  }
+
+  getAnalysisEveryNTicks(): number {
+    return this.analysisEveryNTicks;
   }
 
   async tick(): Promise<void> {
@@ -100,14 +109,15 @@ export class Collector {
       //    This includes metrics row insertion, anomaly detection (which scans
       //    rolling averages over days of data), and alert rule evaluation.
       if (this.tickCount % this.analysisEveryNTicks === 0) {
-        // Insert metrics rows (separate from snapshot — coarser granularity)
+        // Insert metrics rows computed against the last analysis snapshot,
+        // NOT against previousSnapshots (which was overwritten every tick).
         for (const snapshot of snapshots) {
-          const prev = this.previousSnapshots.get(snapshot.queue);
-          if (prev) {
-            // Recompute over the analysis window for more stable rates
-            const metrics = this.computeMetrics(snapshot, prev);
+          const analysisPrev = this.lastAnalysisSnapshots.get(snapshot.queue);
+          if (analysisPrev) {
+            const metrics = this.computeMetrics(snapshot, analysisPrev);
             this.store.insertMetrics(metrics);
           }
+          this.lastAnalysisSnapshots.set(snapshot.queue, snapshot);
         }
 
         // Anomaly detection
@@ -147,6 +157,7 @@ export class Collector {
 
       this.store.insertSnapshot(snapshot);
       this.previousSnapshots.set(snapshot.queue, snapshot);
+      this.lastAnalysisSnapshots.set(snapshot.queue, snapshot);
     }
   }
 

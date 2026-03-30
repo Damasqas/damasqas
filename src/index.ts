@@ -180,7 +180,7 @@ async function start(config: DamasqasConfig): Promise<void> {
     } catch (err) {
       console.error('[damasqas] Anomaly alert dispatch error:', err);
     }
-  }, config.pollInterval * 1000);
+  }, collector.getAnalysisEveryNTicks() * config.pollInterval * 1000);
 
   // Start API server
   const app = createServer(discovery, store, adapter, ops, startTime, config.noDashboard);

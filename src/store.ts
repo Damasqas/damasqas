@@ -658,16 +658,37 @@ export class MetricsStore {
     // Snapshots are collected at 1s intervals so they accumulate fast.
     // Downsample: keep 1-second resolution for the last 1 hour,
     // then only keep one snapshot per 10-second window for older data.
+    // We find the IDs to KEEP first (one per 10s bucket per queue),
+    // then delete everything else in that time range.
     const downsampleCutoff = Date.now() - 60 * 60 * 1000; // 1 hour ago
-    this.db.exec(`
-      DELETE FROM snapshots
-      WHERE ts < ${downsampleCutoff}
-        AND id NOT IN (
-          SELECT MIN(id) FROM snapshots
-          WHERE ts < ${downsampleCutoff} AND ts >= ${cutoff}
-          GROUP BY queue, ts / 10000
-        )
-    `);
+
+    // Step 1: Find the minimum id per (queue, 10-second-bucket) to keep
+    const keepRows = this.db.prepare(`
+      SELECT MIN(id) as keep_id FROM snapshots
+      WHERE ts < ? AND ts >= ?
+      GROUP BY queue, ts / 10000
+    `).all(downsampleCutoff, cutoff) as { keep_id: number }[];
+
+    if (keepRows.length > 0) {
+      // Step 2: Build a set of IDs to keep and delete everything else
+      // in that time range. Use batched DELETE to avoid huge IN clauses.
+      const keepIds = new Set(keepRows.map((r) => r.keep_id));
+      const allInRange = this.db.prepare(
+        'SELECT id FROM snapshots WHERE ts < ? AND ts >= ?',
+      ).all(downsampleCutoff, cutoff) as { id: number }[];
+
+      const toDelete = allInRange.filter((r) => !keepIds.has(r.id)).map((r) => r.id);
+      if (toDelete.length > 0) {
+        const deleteStmt = this.db.prepare('DELETE FROM snapshots WHERE id = ?');
+        const deleteTransaction = this.db.transaction(() => {
+          for (const id of toDelete) {
+            deleteStmt.run(id);
+          }
+        });
+        deleteTransaction();
+      }
+    }
+
     // Then delete anything older than the retention window entirely
     this.db.prepare('DELETE FROM snapshots WHERE ts < ?').run(cutoff);
 

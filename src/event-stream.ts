@@ -89,12 +89,15 @@ export class EventStreamConsumer {
         // Use a short block (2s) so we can pick up new queues promptly.
         const streamKeys = queues.map((q) => `${this.prefix}:${q}:events`);
         const streamIds = queues.map((q) => this.lastIds.get(q) ?? '$');
-        const xreadArgs: string[] = [...streamKeys, ...streamIds];
 
-        // Use call() to avoid ioredis strict overload typing issues with
-        // dynamic argument lists. XREAD BLOCK 2000 COUNT 100 STREAMS k1 k2 ... id1 id2 ...
-        const results = await this.redis.call(
-          'XREAD', 'BLOCK', '2000', 'COUNT', '100', 'STREAMS', ...xreadArgs,
+        // Use the typed xread method with proper literal tokens so ioredis
+        // applies its response transformer (parsing nested arrays into the
+        // [key, [id, fields][]][] format). The cast through unknown is needed
+        // because TypeScript can't verify the spread args match an overload.
+        const results = await (this.redis.xread as Function)(
+          'BLOCK', 2000,
+          'COUNT', 100,
+          'STREAMS', ...streamKeys, ...streamIds,
         ) as [string, [string, string[]][]][] | null;
 
         if (!results) continue; // timeout, no new events
