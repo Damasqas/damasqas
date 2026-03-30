@@ -52,7 +52,7 @@ export class FlowInspector {
    */
   async getWaitingChildrenJobs(queue: string, limit = 50): Promise<WaitingChildrenJob[]> {
     const key = `${this.prefix}:${queue}:waiting-children`;
-    const ids = await this.cmd.lrange(key, 0, limit - 1);
+    const ids = await this.cmd.zrange(key, 0, limit - 1);
     if (ids.length === 0) return [];
 
     // Batch fetch job hashes and dependency counts
@@ -99,7 +99,7 @@ export class FlowInspector {
     for (const queue of queues) {
       try {
         const key = `${this.prefix}:${queue}:waiting-children`;
-        const parentIds = await this.cmd.lrange(key, 0, WAITING_CHILDREN_SCAN_LIMIT - 1);
+        const parentIds = await this.cmd.zrange(key, 0, WAITING_CHILDREN_SCAN_LIMIT - 1);
 
         if (parentIds.length === 0) continue;
 
@@ -281,7 +281,7 @@ export class FlowInspector {
     p.zscore(`${this.prefix}:${queue}:failed`, jobId);          // 5
     p.zscore(`${this.prefix}:${queue}:delayed`, jobId);         // 6
     p.zscore(`${this.prefix}:${queue}:prioritized`, jobId);     // 7
-    p.lpos(`${this.prefix}:${queue}:waiting-children`, jobId);  // 8
+    p.zscore(`${this.prefix}:${queue}:waiting-children`, jobId); // 8
     p.lpos(`${this.prefix}:${queue}:wait`, jobId);              // 9
     p.exists(jobKey);                                            // 10
     p.exists(`${jobKey}:lock`);                                  // 11
@@ -369,7 +369,7 @@ export class FlowInspector {
  * Resolve job state from pipeline results starting at the given offset.
  * Expects results at offset+0..offset+7 to be:
  *   zscore completed, zscore failed, zscore delayed, zscore prioritized,
- *   lpos waiting-children, lpos wait, exists job, exists lock
+ *   zscore waiting-children, lpos wait, exists job, exists lock
  */
 function resolveState(
   results: [Error | null, unknown][],
