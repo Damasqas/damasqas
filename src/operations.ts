@@ -39,4 +39,8 @@ export class Operations {
   async retryAll(queue: string): Promise<number> {
     return this.adapter.retryAllFailed(queue);
   }
+
+  async promoteAllOverdue(queue: string): Promise<number> {
+    return this.adapter.promoteAllOverdue(queue);
+  }
 }

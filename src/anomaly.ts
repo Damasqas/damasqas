@@ -138,6 +138,17 @@ export class AnomalyDetector {
       }
     }
 
+    // 7. Overdue delayed job detection (zero-baseline, like stalled_job)
+    if (latestSnapshot && latestSnapshot.overdueDelayed > 0) {
+      const existing = this.store.getRecentAnomaly(queue, 'overdue_delayed', cooldownMs);
+      if (!existing) {
+        anomalies.push(this.createAnomaly(
+          queue, now, 'overdue_delayed', 'critical',
+          latestSnapshot.overdueDelayed, 0, Infinity,
+        ));
+      }
+    }
+
     // Resolve anomalies that are no longer active
     await this.resolveCleared(queue, latestSnapshot, latestMetrics);
 
@@ -174,6 +185,9 @@ export class AnomalyDetector {
           break;
         case 'oldest_waiting':
           resolved = !snapshot || snapshot.oldestWaitingAge === null || snapshot.oldestWaitingAge < TEN_MINUTES;
+          break;
+        case 'overdue_delayed':
+          resolved = !snapshot || snapshot.overdueDelayed === 0;
           break;
       }
 

@@ -49,6 +49,23 @@ export function queueRoutes(
     }
   });
 
+  router.get('/queues/:name/overdue-delayed', async (req, res) => {
+    try {
+      const name = req.params.name!;
+      const knownQueues = discovery.getQueues();
+      if (!knownQueues.includes(name)) {
+        res.status(404).json({ error: 'Queue not found' });
+        return;
+      }
+
+      const total = await adapter.getOverdueDelayedCount(name);
+      const jobs = await adapter.getOverdueDelayedJobs(name, 100);
+      res.json({ queue: name, total, jobs });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch overdue delayed jobs' });
+    }
+  });
+
   return router;
 }
 
@@ -93,6 +110,7 @@ async function buildQueueState(
       jobId: null,
       ageMs: snapshot?.oldestWaitingAge ?? null,
     },
+    overdueDelayed: snapshot?.overdueDelayed ?? 0,
     anomalies,
   };
 }

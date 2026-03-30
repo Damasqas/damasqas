@@ -4,6 +4,7 @@ import type {
   FailedJob,
   JobDetail,
   ErrorGroup,
+  OverdueDelayedJob,
 } from '../types.js';
 
 export interface QueueAdapter {
@@ -45,6 +46,13 @@ export interface QueueAdapter {
     queue: string,
     limit: number,
   ): Promise<number[]>;
+
+  getOverdueDelayedCount(queue: string): Promise<number>;
+  getOverdueDelayedJobs(queue: string, limit?: number): Promise<OverdueDelayedJob[]>;
+  promoteAllOverdue(queue: string, limit?: number): Promise<number>;
+
+  // Clock skew
+  checkClockSkew(): Promise<void>;
 
   // Connection accessors
   getStreamConnection(): Redis;

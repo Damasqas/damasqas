@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQueue, usePauseQueue, useResumeQueue } from '../hooks/useQueues';
+import { useQueue, usePauseQueue, useResumeQueue, usePromoteAllOverdue } from '../hooks/useQueues';
 import { useMetrics } from '../hooks/useMetrics';
 import { useRetryAll } from '../hooks/useJobs';
 import { useToast } from '../components/Toast';
@@ -29,6 +29,7 @@ export function QueueDetail({ queue }: QueueDetailProps) {
   const pauseMutation = usePauseQueue(queue);
   const resumeMutation = useResumeQueue(queue);
   const retryAllMutation = useRetryAll(queue);
+  const promoteAllMutation = usePromoteAllOverdue(queue);
 
   if (!queueData) {
     return <div style={{ color: '#666', padding: 40 }}>Loading queue...</div>;
@@ -73,6 +74,12 @@ export function QueueDetail({ queue }: QueueDetailProps) {
       onError: () => showToast('Failed to retry jobs', 'error'),
     });
 
+  const handlePromoteAll = () =>
+    promoteAllMutation.mutate(undefined, {
+      onSuccess: () => showToast('Promoting all overdue delayed jobs'),
+      onError: () => showToast('Failed to promote overdue jobs', 'error'),
+    });
+
   return (
     <div>
       <div style={{
@@ -103,6 +110,9 @@ export function QueueDetail({ queue }: QueueDetailProps) {
             <ControlButton label="Pause" onClick={handlePause} />
           )}
           <ControlButton label="Retry All Failed" onClick={handleRetryAll} />
+          {(q.overdueDelayed || 0) > 0 && (
+            <ControlButton label="Promote All Overdue" onClick={handlePromoteAll} />
+          )}
         </div>
       </div>
 
@@ -119,6 +129,7 @@ export function QueueDetail({ queue }: QueueDetailProps) {
         <StatCard label="Delayed" value={q.counts.delayed} />
         <StatCard label="Locks" value={q.processors.locks} />
         <StatCard label="Stalled" value={q.processors.stalled} critical={q.processors.stalled > 0} />
+        <StatCard label="Overdue Delayed" value={q.overdueDelayed || 0} critical={(q.overdueDelayed || 0) > 0} />
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>

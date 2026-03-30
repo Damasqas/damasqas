@@ -30,6 +30,7 @@ export function Overview({ onSelectQueue }: OverviewProps) {
   const totalWaiting = queues.reduce((sum, q) => sum + q.counts.waiting, 0);
   const totalLocks = queues.reduce((sum, q) => sum + q.processors.locks, 0);
   const totalStalled = queues.reduce((sum, q) => sum + q.processors.stalled, 0);
+  const totalOverdue = queues.reduce((sum, q) => sum + (q.overdueDelayed || 0), 0);
 
   return (
     <div>
@@ -53,6 +54,11 @@ export function Overview({ onSelectQueue }: OverviewProps) {
           label="Stalled"
           value={totalStalled}
           critical={totalStalled > 0}
+        />
+        <StatCard
+          label="Overdue"
+          value={totalOverdue}
+          critical={totalOverdue > 0}
         />
         <StatCard label="Queues" value={queues.length} />
       </div>

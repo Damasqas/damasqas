@@ -12,6 +12,7 @@ export interface QueueState {
     delayed: number;
   };
   processors: { locks: number; stalled: number };
+  overdueDelayed: number;
   metrics: {
     throughput: number;
     failureRate: number;
@@ -62,6 +63,20 @@ export function useResumeQueue(name: string) {
   return useMutation({
     mutationFn: () =>
       fetch(`/api/queues/${encodeURIComponent(name)}/resume`, { method: 'POST' }).then((r) =>
+        r.json(),
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue', name] });
+      qc.invalidateQueries({ queryKey: ['queues'] });
+    },
+  });
+}
+
+export function usePromoteAllOverdue(name: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      fetch(`/api/queues/${encodeURIComponent(name)}/promote-all`, { method: 'POST' }).then((r) =>
         r.json(),
       ),
     onSuccess: () => {
