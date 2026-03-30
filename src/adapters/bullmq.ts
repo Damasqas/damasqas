@@ -81,8 +81,10 @@ export class BullMQAdapter implements QueueAdapter {
 
     try {
       const p = this.cmd.pipeline();
-      p.lrange(`${this.prefix}:${queue}:metrics:completed`, 0, 0);
-      p.lrange(`${this.prefix}:${queue}:metrics:failed`, 0, 0);
+      // BullMQ v5 stores metric data in a LIST at the :data suffix.
+      // The key without :data is a HASH with metadata (count, prevTS, prevCount).
+      p.lrange(`${this.prefix}:${queue}:metrics:completed:data`, 0, 0);
+      p.lrange(`${this.prefix}:${queue}:metrics:failed:data`, 0, 0);
       const results = await p.exec();
       if (!results) return null;
 

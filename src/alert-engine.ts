@@ -142,8 +142,11 @@ export class AlertEngine {
           const analysis = this.drainAnalyzer.getDrainAnalysis(queue);
           if (analysis) {
             // Fire when queue has been growing for 5+ consecutive intervals
+            // and trend is actually 'growing' (netRate < -1) or 'stalled'.
+            // This aligns with the trend classification thresholds in DrainAnalyzer.
             const consecutiveGrowth = this.drainAnalyzer.getConsecutiveGrowthCount(queue);
-            return consecutiveGrowth >= 5 && analysis.netRate < -threshold;
+            const isGrowing = analysis.trend === 'growing' || analysis.trend === 'stalled';
+            return consecutiveGrowth >= 5 && isGrowing && analysis.netRate < -threshold;
           }
         }
         // Fallback to basic metrics check

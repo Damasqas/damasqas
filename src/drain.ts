@@ -52,11 +52,11 @@ export class DrainAnalyzer {
   }
 
   /**
-   * Compute the smoothed waiting depth change rate (jobs/min).
-   * Unlike completed/failed, waiting can legitimately decrease,
-   * so we don't clamp to zero.
+   * Compute the smoothed total depth change rate (jobs/min).
+   * Total depth = waiting + prioritized + waitingChildren (all BullMQ backlog sources).
+   * Unlike completed/failed, depth can legitimately decrease, so we don't clamp to zero.
    */
-  private smoothedWaitingDelta(queue: string): { rate: number; delta: number } {
+  private smoothedTotalDepthDelta(queue: string): { rate: number; delta: number } {
     const buf = this.buffers.get(queue);
     if (!buf || buf.length < 2) return { rate: 0, delta: 0 };
 
@@ -65,7 +65,9 @@ export class DrainAnalyzer {
 
     const first = window[0]!;
     const last = window[window.length - 1]!;
-    const delta = last.waiting - first.waiting;
+    const firstDepth = first.waiting + first.prioritized + first.waitingChildren;
+    const lastDepth = last.waiting + last.prioritized + last.waitingChildren;
+    const delta = lastDepth - firstDepth;
     const timeSpanMs = last.timestamp - first.timestamp;
     if (timeSpanMs <= 0) return { rate: 0, delta: 0 };
 
@@ -82,28 +84,36 @@ export class DrainAnalyzer {
 
     const current = buf[buf.length - 1]!;
 
-    // Determine drain rate (throughput in jobs/min)
+    // Total backlog depth includes all queued jobs waiting to be processed:
+    // - wait list (regular FIFO jobs)
+    // - prioritized sorted set (priority jobs, separate from wait in BullMQ v5)
+    // - waiting-children list (jobs blocked on child completion)
+    const totalDepth = current.waiting + current.prioritized + current.waitingChildren;
+
+    // Determine drain rate (jobs/min leaving wait).
+    // In BullMQ, jobs leave wait via both completed AND failed paths,
+    // so we must count both to get the true drain rate.
     let drainRate: number;
     const bullmqMetrics = await adapter.getBullMQThroughput(queue);
     if (bullmqMetrics !== null) {
       // BullMQ metrics are already per-minute counts
-      drainRate = bullmqMetrics.completed;
+      drainRate = bullmqMetrics.completed + bullmqMetrics.failed;
     } else {
-      drainRate = this.smoothedRate(queue, 'completed');
+      drainRate = this.smoothedRate(queue, 'completed') + this.smoothedRate(queue, 'failed');
     }
 
-    // Compute waiting depth change
-    const { rate: waitingChangeRate, delta: depthDelta } = this.smoothedWaitingDelta(queue);
+    // Compute waiting depth change (includes prioritized + waitingChildren)
+    const { rate: waitingChangeRate, delta: depthDelta } = this.smoothedTotalDepthDelta(queue);
 
-    // Inflow rate = jobs entering wait per minute
+    // Inflow rate = jobs entering the queue per minute
     // waitingChangeRate = inflowRate - drainRate  =>  inflowRate = waitingChangeRate + drainRate
     const inflowRate = Math.max(0, waitingChangeRate + drainRate);
 
     const netRate = drainRate - inflowRate; // positive = draining
 
     let projectedDrainMinutes: number | null = null;
-    if (netRate > 0 && current.waiting > 0) {
-      projectedDrainMinutes = current.waiting / netRate;
+    if (netRate > 0 && totalDepth > 0) {
+      projectedDrainMinutes = totalDepth / netRate;
     }
 
     const capacityDeficit = netRate <= 0 && inflowRate > 0
@@ -113,7 +123,7 @@ export class DrainAnalyzer {
     // Determine trend
     // A paused queue with no active workers is intentionally idle, not stalled.
     let trend: DrainAnalysis['trend'];
-    if (current.active === 0 && current.waiting > 0 && !current.paused) {
+    if (current.active === 0 && totalDepth > 0 && !current.paused) {
       trend = 'stalled';
     } else if (netRate > 1) {
       trend = 'draining';
@@ -124,7 +134,7 @@ export class DrainAnalyzer {
     }
 
     // Track consecutive growth
-    if (trend === 'growing' || (depthDelta > 0 && current.waiting > 0)) {
+    if (trend === 'growing' || (depthDelta > 0 && totalDepth > 0)) {
       this.consecutiveGrowth.set(queue, (this.consecutiveGrowth.get(queue) ?? 0) + 1);
     } else {
       this.consecutiveGrowth.set(queue, 0);
@@ -132,7 +142,7 @@ export class DrainAnalyzer {
 
     const analysis: DrainAnalysis = {
       queue,
-      currentDepth: current.waiting,
+      currentDepth: totalDepth,
       depthDelta,
       inflowRate: Math.round(inflowRate * 10) / 10,
       drainRate: Math.round(drainRate * 10) / 10,
