@@ -1577,11 +1577,21 @@ export class MetricsStore {
    * Merge a truncated job payload into the event's existing data JSON.
    * The payload is stored under the `_jobData` key so it becomes searchable
    * via FTS without clobbering the original event fields.
+   *
+   * Attempts to parse the payload JSON to avoid double-encoding (the Redis
+   * `data` field is already JSON-stringified by BullMQ). Falls back to
+   * storing as a string if parsing fails (e.g. truncated payload).
    */
   private mergeJobPayload(existingData: string | null, jobPayload: string): string {
     try {
       const parsed = existingData ? JSON.parse(existingData) : {};
-      parsed._jobData = jobPayload;
+      try {
+        parsed._jobData = JSON.parse(jobPayload);
+      } catch {
+        // Payload may be truncated (500-char limit) producing invalid JSON.
+        // Store as string — FTS tokenizer still extracts searchable terms.
+        parsed._jobData = jobPayload;
+      }
       return JSON.stringify(parsed);
     } catch {
       // If existing data isn't valid JSON, wrap both

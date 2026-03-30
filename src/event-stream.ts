@@ -4,6 +4,21 @@ import type { Discovery } from './discovery.js';
 import type { EventRecord, JobTimingRecord } from './types.js';
 
 /**
+ * Lua script that fetches job name and payload from a BullMQ job hash,
+ * truncating the payload to 500 characters SERVER-SIDE. This avoids
+ * transferring multi-MB payloads over the network when we only need a
+ * prefix for FTS indexing.
+ *
+ * KEYS[1] = job hash key (e.g., bull:payments:123)
+ * Returns: [name, truncatedData] (both may be nil if key is deleted)
+ */
+const HYDRATE_LUA = `
+local r = redis.call('HMGET', KEYS[1], 'name', 'data')
+if r[2] then r[2] = string.sub(r[2], 1, 500) end
+return r
+`;
+
+/**
  * EventStreamConsumer uses a dedicated Redis connection to run blocking
  * XREAD across all discovered queue event streams. Events are persisted
  * to the SQLite events table and FTS index.
@@ -15,7 +30,8 @@ import type { EventRecord, JobTimingRecord } from './types.js';
  * Features:
  * - Cursor persistence: resumes from last-read stream ID across restarts
  * - XREAD chunking: groups of 20 queues per XREAD call for scalability
- * - Job name hydration: batch HGET every 5s to resolve job names
+ * - Job name + payload hydration: batch Lua eval every 5s to resolve names
+ *   and index truncated payloads for full-text search
  */
 export class EventStreamConsumer {
   private redis: Redis;
@@ -28,6 +44,7 @@ export class EventStreamConsumer {
   private verbose: boolean;
   private hydrateTimer: ReturnType<typeof setInterval> | null = null;
   private timingTimer: ReturnType<typeof setInterval> | null = null;
+  private hydrateSha: string | null = null;
 
   constructor(
     redis: Redis,
@@ -243,12 +260,14 @@ export class EventStreamConsumer {
   /**
    * Batch-hydrate job names and payloads for events with NULL job_name.
    * Collects unhydrated job IDs across ALL queues, then issues a single
-   * pipelined HMGET batch to Redis for both name and data fields.
+   * pipelined batch to Redis for both name and data fields.
    * This is O(1) round-trips regardless of queue count.
    *
-   * Job payloads are truncated to 500 characters and stored in the event's
-   * data field to enable full-text search by order ID, customer reference,
-   * or any other content in the job payload.
+   * Job payloads are truncated SERVER-SIDE to 500 characters via a Lua
+   * script to avoid transferring multi-MB payloads over the network.
+   * The truncated payload is stored in the event's data field to enable
+   * full-text search by order ID, customer reference, or any other
+   * content in the job payload.
    */
   private async hydrateJobNames(): Promise<void> {
     const queues = this.discovery.getQueues();
@@ -264,15 +283,34 @@ export class EventStreamConsumer {
 
     if (work.length === 0) return;
 
-    // Single pipeline for all HMGET calls across all queues
-    // Fetch both 'name' and 'data' (job payload) in one round-trip
+    // Load Lua script for server-side payload truncation (once, cached by SHA)
+    if (!this.hydrateSha) {
+      this.hydrateSha = await this.cmdRedis.script(
+        'LOAD',
+        HYDRATE_LUA,
+      ) as string;
+    }
+
+    // Pipeline EVALSHA calls — each returns [name, truncatedData].
+    // Truncation happens inside Redis so we never transfer full payloads.
     const pipeline = this.cmdRedis.pipeline();
     for (const { queue, jobId } of work) {
-      pipeline.hmget(`${this.prefix}:${queue}:${jobId}`, 'name', 'data');
+      pipeline.evalsha(this.hydrateSha, 1, `${this.prefix}:${queue}:${jobId}`);
     }
 
     const results = await pipeline.exec();
     if (!results) return;
+
+    // Check for NOSCRIPT errors first. If Redis restarted and evicted
+    // the cached script, every EVALSHA in the pipeline fails. We must NOT
+    // mark these jobs as '[error]' — that would be permanent since
+    // getUnhydratedEventJobIds only queries job_name IS NULL. Instead,
+    // clear the SHA and retry on the next hydration cycle.
+    const firstErr = results[0]?.[0];
+    if (firstErr && String(firstErr).includes('NOSCRIPT')) {
+      this.hydrateSha = null;
+      return; // Retry next cycle with fresh SCRIPT LOAD
+    }
 
     const updates: { queue: string; jobId: string; jobName: string; jobData: string | null }[] = [];
     for (let i = 0; i < work.length; i++) {
@@ -283,17 +321,13 @@ export class EventStreamConsumer {
       }
 
       const [name, data] = (fields as (string | null)[]) ?? [null, null];
-      const resolvedName = name || '[deleted]';
-
-      // Truncate payload to 500 chars for FTS indexing — catches most
-      // search cases (order IDs, customer refs) without inflating storage.
-      const searchableData = data ? data.substring(0, 500) : null;
+      const resolvedName = (name as string) || '[deleted]';
 
       updates.push({
         queue: work[i]!.queue,
         jobId: work[i]!.jobId,
         jobName: resolvedName,
-        jobData: searchableData,
+        jobData: (data as string) || null,
       });
     }
 
