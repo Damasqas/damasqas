@@ -99,9 +99,12 @@ export class AlertEngine {
         return snapshot.waiting > threshold;
 
       case 'overdue_delayed': {
-        // Check if there are delayed jobs that should have been promoted by now
-        // This requires checking delayed zset scores against current time
-        return snapshot.delayed > threshold;
+        // Check delayed jobs whose scheduled timestamp has passed
+        const overdueJobs = await this.adapter.getOverdueDelayedJobs(queue, 5);
+        if (overdueJobs.length === 0) return false;
+        const thresholdMs = config.threshold ?? 60000;
+        const oldestOverdueMs = Math.max(...overdueJobs.map(j => j.overdueByMs));
+        return oldestOverdueMs > thresholdMs;
       }
 
       case 'orphaned_active': {
@@ -148,6 +151,30 @@ export class AlertEngine {
     ruleConfig: AlertRuleConfig,
   ): Promise<void> {
     const now = Date.now();
+
+    // Enrich payload with sample overdue jobs when applicable
+    let overdueContext: unknown = undefined;
+    if (rule.type === 'overdue_delayed') {
+      try {
+        const overdueJobs = await this.adapter.getOverdueDelayedJobs(queue, 20);
+        const count = await this.adapter.getOverdueDelayedCount(queue);
+        overdueContext = {
+          total: count,
+          oldestOverdueMs: overdueJobs.length > 0
+            ? Math.max(...overdueJobs.map(j => j.overdueByMs))
+            : 0,
+          sampleJobs: overdueJobs.map(j => ({
+            id: j.id,
+            name: j.name,
+            scheduledFor: j.scheduledFor,
+            overdueByMs: j.overdueByMs,
+          })),
+        };
+      } catch {
+        // Non-critical — proceed without enrichment
+      }
+    }
+
     const payload = JSON.stringify({
       ruleId: rule.id,
       ruleName: rule.name,
@@ -158,9 +185,11 @@ export class AlertEngine {
         active: snapshot.active,
         failed: snapshot.failed,
         delayed: snapshot.delayed,
+        overdueDelayed: snapshot.overdueDelayed,
         throughput1m: snapshot.throughput1m,
         failRate1m: snapshot.failRate1m,
       },
+      ...(overdueContext ? { overdueDelayed: overdueContext } : {}),
       config: ruleConfig,
       firedAt: now,
     });

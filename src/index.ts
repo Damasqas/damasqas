@@ -66,6 +66,7 @@ async function start(config: DamasqasConfig): Promise<void> {
 
   // Initialize core components
   const adapter = new BullMQAdapter(config.redis, config.prefix);
+  await adapter.checkClockSkew();
   const store = new MetricsStore(config.dataDir, config.retentionDays);
   const discovery = new Discovery(adapter, store, config.prefix);
   const anomalyDetector = new AnomalyDetector(store, adapter, config);

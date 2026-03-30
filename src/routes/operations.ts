@@ -69,6 +69,15 @@ export function operationRoutes(ops: Operations, adapter: QueueAdapter): Router 
     }
   });
 
+  router.post('/queues/:name/promote-all', async (req, res) => {
+    try {
+      const count = await ops.promoteAllOverdue(req.params.name!);
+      res.json({ ok: true, promoted: count });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to promote overdue jobs' });
+    }
+  });
+
   router.get('/queues/:name/errors', async (req, res) => {
     try {
       const since = Date.now() - 5 * 60 * 1000;

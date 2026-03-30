@@ -48,6 +48,7 @@ export async function backfillQueue(
       waitingChildren: 0,
       locks: 0,
       stalledCount: 0,
+      overdueDelayed: 0,
       oldestWaitingAge: null,
       paused: false,
       throughput1m: null,

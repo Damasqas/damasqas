@@ -12,7 +12,7 @@ import type {
   AlertFire,
 } from './types.js';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export class MetricsStore {
   private db: Database.Database;
@@ -47,6 +47,9 @@ export class MetricsStore {
     }
     if (currentVersion < 2) {
       this.migrateV2();
+    }
+    if (currentVersion < 3) {
+      this.migrateV3();
     }
 
     if (!row) {
@@ -210,6 +213,15 @@ export class MetricsStore {
     `);
   }
 
+  /** V3: Add overdue_delayed column to snapshots */
+  private migrateV3(): void {
+    try {
+      this.db.exec(`ALTER TABLE snapshots ADD COLUMN overdue_delayed INTEGER NOT NULL DEFAULT 0`);
+    } catch {
+      // Column already exists — ignore
+    }
+  }
+
   // ── Snapshot Methods ─────────────────────────────────────────────────
 
   insertSnapshot(snapshot: QueueSnapshot): void {
@@ -217,9 +229,10 @@ export class MetricsStore {
       INSERT INTO snapshots (
         queue, ts, waiting, active, completed, failed, delayed,
         locks, stalled, oldest_waiting_age, paused,
-        prioritized, waiting_children, throughput_1m, fail_rate_1m, avg_process_ms, avg_wait_ms
+        prioritized, waiting_children, throughput_1m, fail_rate_1m, avg_process_ms, avg_wait_ms,
+        overdue_delayed
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       snapshot.queue,
@@ -239,6 +252,7 @@ export class MetricsStore {
       snapshot.failRate1m,
       snapshot.avgProcessMs,
       snapshot.avgWaitMs,
+      snapshot.overdueDelayed,
     );
   }
 
@@ -270,6 +284,7 @@ export class MetricsStore {
         AVG(delayed) AS delayed,
         MAX(locks) AS locks,
         MAX(stalled) AS stalled,
+        MAX(overdue_delayed) AS overdue_delayed,
         MAX(oldest_waiting_age) AS oldest_waiting_age,
         MAX(paused) AS paused,
         AVG(prioritized) AS prioritized,
@@ -792,6 +807,7 @@ export class MetricsStore {
       waitingChildren: (row.waiting_children as number) ?? 0,
       locks: row.locks as number,
       stalledCount: row.stalled as number,
+      overdueDelayed: (row.overdue_delayed as number) ?? 0,
       oldestWaitingAge: row.oldest_waiting_age as number | null,
       paused: (row.paused as number) === 1,
       throughput1m: row.throughput_1m as number | null,

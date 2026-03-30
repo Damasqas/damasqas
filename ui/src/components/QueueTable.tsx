@@ -22,7 +22,7 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            {['Queue', 'Status', 'Throughput', 'Failures', 'Waiting', 'Active', 'Locks', 'Stalled'].map((h) => (
+            {['Queue', 'Status', 'Throughput', 'Failures', 'Waiting', 'Active', 'Locks', 'Stalled', 'Overdue'].map((h) => (
               <th key={h} style={{
                 padding: '12px 16px',
                 textAlign: 'left',
@@ -96,6 +96,14 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
                 color: q.processors.stalled > 0 ? '#ff3333' : 'inherit',
               }}>
                 {q.processors.stalled}
+              </td>
+              <td style={{
+                padding: '12px 16px',
+                fontFamily: 'IBM Plex Mono, monospace',
+                fontSize: 13,
+                color: (q.overdueDelayed || 0) > 0 ? '#ff3333' : 'inherit',
+              }}>
+                {q.overdueDelayed || 0}
               </td>
             </tr>
           ))}

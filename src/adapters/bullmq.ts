@@ -6,6 +6,7 @@ import type {
   FailedJob,
   JobDetail,
   ErrorGroup,
+  OverdueDelayedJob,
 } from '../types.js';
 
 export class BullMQAdapter implements QueueAdapter {
@@ -14,6 +15,7 @@ export class BullMQAdapter implements QueueAdapter {
   private ops: Redis;      // mutations: pause, resume, retry, clean
   private prefix: string;
   private queueInstances = new Map<string, Queue>();
+  private clockSkewMs = 0;
 
   constructor(redisUrl: string, prefix = 'bull') {
     const connOpts = { maxRetriesPerRequest: null };
@@ -29,6 +31,28 @@ export class BullMQAdapter implements QueueAdapter {
 
   getCmdConnection(): Redis {
     return this.cmd;
+  }
+
+  /** Compare local clock with Redis TIME to detect skew. */
+  async checkClockSkew(): Promise<void> {
+    try {
+      const result = await this.cmd.time();
+      const redisTimeMs = Number(result[0]) * 1000 + Math.floor(Number(result[1]) / 1000);
+      this.clockSkewMs = Date.now() - redisTimeMs;
+      if (Math.abs(this.clockSkewMs) > 5000) {
+        console.warn(
+          `[damasqas] Clock skew detected: local clock is ${this.clockSkewMs > 0 ? 'ahead' : 'behind'} ` +
+          `Redis by ${Math.abs(this.clockSkewMs)}ms. Overdue delayed detection will compensate.`,
+        );
+      }
+    } catch {
+      // Non-critical — proceed without skew compensation
+    }
+  }
+
+  /** Current time adjusted for clock skew relative to Redis. */
+  private adjustedNow(): number {
+    return Date.now() - this.clockSkewMs;
   }
 
   async discoverQueues(): Promise<string[]> {
@@ -123,6 +147,12 @@ export class BullMQAdapter implements QueueAdapter {
       }
     }
 
+    // Count overdue delayed jobs (score < now - 60s grace period)
+    const overdueUpperBound = this.adjustedNow() - 60_000;
+    const overdueDelayed = overdueUpperBound > 0
+      ? await this.cmd.zcount(key('delayed'), '0', String(overdueUpperBound))
+      : 0;
+
     return {
       queue,
       timestamp: now,
@@ -135,6 +165,7 @@ export class BullMQAdapter implements QueueAdapter {
       waitingChildren,
       locks,
       stalledCount,
+      overdueDelayed,
       oldestWaitingAge,
       paused,
       throughput1m: null,
@@ -289,6 +320,22 @@ export class BullMQAdapter implements QueueAdapter {
       }
     }
 
+    // ── Phase 4: Overdue delayed counts — single pipeline for all queues ──
+    const overdueCounts = new Map<number, number>();
+    const overdueUpperBound = this.adjustedNow() - 60_000;
+    if (overdueUpperBound > 0) {
+      const p4 = this.cmd.pipeline();
+      for (const queue of queues) {
+        p4.zcount(`${this.prefix}:${queue}:delayed`, '0', String(overdueUpperBound));
+      }
+      const r4 = await p4.exec();
+      if (r4) {
+        for (let q = 0; q < queues.length; q++) {
+          overdueCounts.set(q, pipelineInt(r4, q));
+        }
+      }
+    }
+
     // ── Assemble final snapshots ──
     const snapshots: QueueSnapshot[] = [];
     for (let q = 0; q < phase1.length; q++) {
@@ -307,6 +354,7 @@ export class BullMQAdapter implements QueueAdapter {
         waitingChildren: d.waitingChildren,
         locks: lc?.locks ?? 0,
         stalledCount: lc?.stalled ?? 0,
+        overdueDelayed: overdueCounts.get(q) ?? 0,
         oldestWaitingAge: oldestWaitingAges.get(q) ?? null,
         paused: d.paused,
         throughput1m: null,
@@ -587,6 +635,87 @@ export class BullMQAdapter implements QueueAdapter {
         }
       } catch {
         // Skip jobs that can't be retried
+      }
+    }
+    return count;
+  }
+
+  async getOverdueDelayedCount(queue: string): Promise<number> {
+    const overdueUpperBound = this.adjustedNow() - 60_000;
+    if (overdueUpperBound <= 0) return 0;
+    return this.cmd.zcount(
+      `${this.prefix}:${queue}:delayed`,
+      '0',
+      String(overdueUpperBound),
+    );
+  }
+
+  async getOverdueDelayedJobs(queue: string, limit = 100): Promise<OverdueDelayedJob[]> {
+    const now = this.adjustedNow();
+    const key = `${this.prefix}:${queue}:delayed`;
+
+    // ZRANGEBYSCORE with WITHSCORES returns [id, score, id, score, ...]
+    const raw = await this.cmd.zrangebyscore(
+      key, '0', String(now),
+      'WITHSCORES', 'LIMIT', 0, limit,
+    ) as string[];
+
+    if (raw.length === 0) return [];
+
+    // Parse ID/score pairs
+    const entries: { id: string; score: number }[] = [];
+    for (let i = 0; i < raw.length; i += 2) {
+      entries.push({ id: raw[i]!, score: parseInt(raw[i + 1]!, 10) });
+    }
+
+    // Hydrate first 20 jobs via pipelined HMGET
+    const toHydrate = entries.slice(0, 20);
+    const pipeline = this.cmd.pipeline();
+    for (const { id } of toHydrate) {
+      pipeline.hmget(`${this.prefix}:${queue}:${id}`, 'name', 'delay', 'timestamp');
+    }
+    const results = await pipeline.exec();
+
+    const jobs: OverdueDelayedJob[] = [];
+    const realNow = Date.now();
+    for (let i = 0; i < toHydrate.length; i++) {
+      const { id, score } = toHydrate[i]!;
+      const err = results?.[i]?.[0];
+      const fields = results?.[i]?.[1] as (string | null)[] | undefined;
+      if (err || !fields) continue;
+
+      const scheduledFor = score; // The sorted set score IS the target timestamp
+      jobs.push({
+        id,
+        name: fields[0] || 'unknown',
+        delay: parseInt(fields[1] || '0', 10),
+        timestamp: parseInt(fields[2] || '0', 10),
+        scheduledFor,
+        overdueByMs: realNow - scheduledFor,
+      });
+    }
+
+    return jobs;
+  }
+
+  async promoteAllOverdue(queue: string, limit = 100): Promise<number> {
+    const now = this.adjustedNow();
+    const key = `${this.prefix}:${queue}:delayed`;
+    const jobIds = await this.cmd.zrangebyscore(key, '0', String(now), 'LIMIT', 0, limit) as string[];
+
+    if (jobIds.length === 0) return 0;
+
+    const q = this.getQueue(queue);
+    let count = 0;
+    for (const id of jobIds) {
+      try {
+        const job = await Job.fromId(q, id);
+        if (job) {
+          await job.promote();
+          count++;
+        }
+      } catch {
+        // Skip jobs that can't be promoted
       }
     }
     return count;

@@ -10,6 +10,7 @@ export interface QueueSnapshot {
   waitingChildren: number;
   locks: number;
   stalledCount: number;
+  overdueDelayed: number;
   oldestWaitingAge: number | null;
   paused: boolean;
   throughput1m: number | null;
@@ -122,6 +123,7 @@ export type AnomalyType =
   | 'backlog_growth'
   | 'processing_slow'
   | 'stalled_job'
+  | 'overdue_delayed'
   | 'queue_idle'
   | 'oldest_waiting';
 
@@ -193,5 +195,15 @@ export interface QueueState {
     jobId: string | null;
     ageMs: number | null;
   };
+  overdueDelayed: number;
   anomalies: AnomalyRecord[];
+}
+
+export interface OverdueDelayedJob {
+  id: string;
+  name: string;
+  delay: number;
+  timestamp: number;
+  scheduledFor: number;
+  overdueByMs: number;
 }
