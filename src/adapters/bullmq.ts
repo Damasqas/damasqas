@@ -7,6 +7,9 @@ import type {
   JobDetail,
   ErrorGroup,
   OverdueDelayedJob,
+  RedisSnapshot,
+  RedisKeySize,
+  SlowlogEntry,
 } from '../types.js';
 
 export class BullMQAdapter implements QueueAdapter {
@@ -797,6 +800,182 @@ export class BullMQAdapter implements QueueAdapter {
     return count;
   }
 
+  // ── Redis Health Methods ────────────────────────────────────────────
+
+  async collectRedisInfo(): Promise<RedisSnapshot> {
+    const pipeline = this.cmd.pipeline();
+    pipeline.info('memory');
+    pipeline.info('clients');
+    pipeline.info('stats');
+    pipeline.info('keyspace');
+    pipeline.dbsize();
+
+    const results = (await pipeline.exec())! as [Error | null, unknown][];
+    const memoryInfo = parseRedisInfo(pipelineVal(results, 0) as string || '');
+    const clientsInfo = parseRedisInfo(pipelineVal(results, 1) as string || '');
+    const statsInfo = parseRedisInfo(pipelineVal(results, 2) as string || '');
+    const keyspaceInfo = parseRedisInfo(pipelineVal(results, 3) as string || '');
+    const dbsize = pipelineInt(results, 4);
+
+    // Parse keyspace for total keys (fallback to DBSIZE)
+    let totalKeys = dbsize;
+    const db0 = keyspaceInfo['db0'];
+    if (db0) {
+      const keysMatch = db0.match(/keys=(\d+)/);
+      if (keysMatch) totalKeys = parseInt(keysMatch[1]!, 10);
+    }
+
+    return {
+      ts: Date.now(),
+      usedMemory: parseInt(memoryInfo['used_memory'] || '0', 10),
+      usedMemoryPeak: parseInt(memoryInfo['used_memory_peak'] || '0', 10),
+      maxmemory: parseInt(memoryInfo['maxmemory'] || '0', 10),
+      memFragmentationRatio: memoryInfo['mem_fragmentation_ratio']
+        ? parseFloat(memoryInfo['mem_fragmentation_ratio'])
+        : null,
+      connectedClients: parseInt(clientsInfo['connected_clients'] || '0', 10),
+      opsPerSec: parseInt(statsInfo['instantaneous_ops_per_sec'] || '0', 10),
+      totalKeys,
+      usedMemoryRss: memoryInfo['used_memory_rss']
+        ? parseInt(memoryInfo['used_memory_rss'], 10)
+        : null,
+      maxmemoryPolicy: null, // Populated separately via checkMaxmemoryPolicy
+    };
+  }
+
+  async collectKeySizes(queues: string[]): Promise<RedisKeySize[]> {
+    if (queues.length === 0) return [];
+
+    const ts = Date.now();
+    const pipeline = this.cmd.pipeline();
+    const keyMap: { queue: string; keyType: string }[] = [];
+
+    for (const queue of queues) {
+      const base = `${this.prefix}:${queue}`;
+      // events stream
+      pipeline.xlen(`${base}:events`);
+      keyMap.push({ queue, keyType: 'events' });
+      // completed sorted set
+      pipeline.zcard(`${base}:completed`);
+      keyMap.push({ queue, keyType: 'completed' });
+      // failed sorted set
+      pipeline.zcard(`${base}:failed`);
+      keyMap.push({ queue, keyType: 'failed' });
+      // wait list
+      pipeline.llen(`${base}:wait`);
+      keyMap.push({ queue, keyType: 'wait' });
+      // active list
+      pipeline.llen(`${base}:active`);
+      keyMap.push({ queue, keyType: 'active' });
+      // delayed sorted set
+      pipeline.zcard(`${base}:delayed`);
+      keyMap.push({ queue, keyType: 'delayed' });
+      // prioritized sorted set (BullMQ v5: holds waiting jobs when priorities enabled)
+      pipeline.zcard(`${base}:prioritized`);
+      keyMap.push({ queue, keyType: 'prioritized' });
+      // waiting-children list (BullMQ v5: parent jobs waiting for child flows)
+      pipeline.llen(`${base}:waiting-children`);
+      keyMap.push({ queue, keyType: 'waiting-children' });
+    }
+
+    const results = (await pipeline.exec())! as [Error | null, unknown][];
+    const sizes: RedisKeySize[] = [];
+
+    for (let i = 0; i < keyMap.length; i++) {
+      const count = pipelineInt(results, i);
+      sizes.push({
+        ts,
+        queue: keyMap[i]!.queue,
+        keyType: keyMap[i]!.keyType,
+        entryCount: count,
+        memoryBytes: null,
+      });
+    }
+
+    return sizes;
+  }
+
+  async collectKeyMemoryUsage(queues: string[]): Promise<RedisKeySize[]> {
+    if (queues.length === 0) return [];
+
+    const ts = Date.now();
+    const pipeline = this.cmd.pipeline();
+    const keyMap: { queue: string; keyType: string }[] = [];
+    const keyTypes = ['events', 'completed', 'failed'] as const;
+
+    for (const queue of queues) {
+      const base = `${this.prefix}:${queue}`;
+      for (const keyType of keyTypes) {
+        pipeline.call('MEMORY', 'USAGE', `${base}:${keyType}`);
+        keyMap.push({ queue, keyType });
+      }
+    }
+
+    const results = (await pipeline.exec())! as [Error | null, unknown][];
+    const sizes: RedisKeySize[] = [];
+
+    for (let i = 0; i < keyMap.length; i++) {
+      const [err, val] = results[i]!;
+      const memoryBytes = err ? null : (val as number | null);
+      sizes.push({
+        ts,
+        queue: keyMap[i]!.queue,
+        keyType: keyMap[i]!.keyType,
+        entryCount: 0, // entry counts come from collectKeySizes
+        memoryBytes,
+      });
+    }
+
+    return sizes;
+  }
+
+  async collectSlowlog(): Promise<{ entries: SlowlogEntry[]; totalCount: number }> {
+    const pipeline = this.cmd.pipeline();
+    pipeline.call('SLOWLOG', 'GET', '20');
+    pipeline.call('SLOWLOG', 'LEN');
+
+    const results = (await pipeline.exec())! as [Error | null, unknown][];
+    const rawEntries = pipelineVal(results, 0) as unknown[][] || [];
+    const totalCount = pipelineInt(results, 1);
+
+    const entries: SlowlogEntry[] = [];
+    for (const entry of rawEntries) {
+      if (!Array.isArray(entry) || entry.length < 4) continue;
+      // Slowlog entry: [id, timestamp, duration_us, [command, args...], ...]
+      const slowlogId = entry[0] as number;
+      const tsSeconds = entry[1] as number;
+      const durationUs = entry[2] as number;
+      const cmdArgs = entry[3] as string[];
+      const command = Array.isArray(cmdArgs) ? cmdArgs.join(' ') : String(cmdArgs);
+
+      // Check if BullMQ-related: EVALSHA with key arguments matching the prefix
+      const isBullMQ = this.isBullMQCommand(command);
+
+      entries.push({
+        slowlogId,
+        ts: tsSeconds * 1000,
+        durationUs,
+        command: command.length > 500 ? command.slice(0, 500) + '...' : command,
+        isBullMQ,
+      });
+    }
+
+    return { entries, totalCount };
+  }
+
+  async checkMaxmemoryPolicy(): Promise<string> {
+    const result = await this.cmd.call('CONFIG', 'GET', 'maxmemory-policy') as string[];
+    // Returns ['maxmemory-policy', '<value>']
+    return result?.[1] ?? 'unknown';
+  }
+
+  private isBullMQCommand(command: string): boolean {
+    const upper = command.toUpperCase();
+    if (!upper.startsWith('EVALSHA')) return false;
+    // Match against the configured prefix (e.g., 'bull:') rather than hardcoding
+    return command.includes(`${this.prefix}:`);
+  }
+
   async disconnect(): Promise<void> {
     for (const q of this.queueInstances.values()) {
       await q.close();
@@ -822,4 +1001,17 @@ function pipelineVal(results: [Error | null, unknown][], idx: number): unknown {
   const [err, val] = results[idx]!;
   if (err) return null;
   return val;
+}
+
+function parseRedisInfo(info: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const line of info.split('\r\n')) {
+    if (line && !line.startsWith('#')) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx !== -1) {
+        result[line.slice(0, colonIdx)] = line.slice(colonIdx + 1);
+      }
+    }
+  }
+  return result;
 }

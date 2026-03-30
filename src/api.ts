@@ -15,6 +15,7 @@ import { jobRoutes } from './routes/jobs.js';
 import { anomalyRoutes } from './routes/anomalies.js';
 import { operationRoutes } from './routes/operations.js';
 import { redisRoutes } from './routes/redis.js';
+import { RedisHealthCollector } from './redis-health.js';
 import { alertRoutes } from './routes/alerts.js';
 import { eventRoutes } from './routes/events.js';
 
@@ -41,7 +42,8 @@ export function createServer(
   app.use('/api', jobRoutes(adapter));
   app.use('/api', anomalyRoutes(store));
   app.use('/api', operationRoutes(ops, adapter));
-  app.use('/api', redisRoutes(adapter));
+  const redisHealthCollector = collector?.getRedisHealthCollector() ?? new RedisHealthCollector(10);
+  app.use('/api', redisRoutes(adapter, store, redisHealthCollector));
   app.use('/api', alertRoutes(store));
   app.use('/api', eventRoutes(store));
 

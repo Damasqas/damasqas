@@ -16,6 +16,7 @@ const DEFAULTS: DamasqasConfig = {
   failureThreshold: 3,
   backlogThreshold: 5,
   stallAlert: true,
+  redisKeyMemoryUsage: true,
   apiKey: null,
   noDashboard: false,
   verbose: false,
@@ -61,6 +62,7 @@ function loadEnvVars(): Partial<DamasqasConfig> {
   if (process.env.DAMASQAS_COOLDOWN) env.cooldown = parseInt(process.env.DAMASQAS_COOLDOWN, 10);
   if (process.env.DAMASQAS_FAILURE_THRESHOLD) env.failureThreshold = parseFloat(process.env.DAMASQAS_FAILURE_THRESHOLD);
   if (process.env.DAMASQAS_BACKLOG_THRESHOLD) env.backlogThreshold = parseFloat(process.env.DAMASQAS_BACKLOG_THRESHOLD);
+  if (process.env.DAMASQAS_REDIS_KEY_MEMORY === 'false') env.redisKeyMemoryUsage = false;
   if (process.env.DAMASQAS_API_KEY) env.apiKey = process.env.DAMASQAS_API_KEY;
   if (process.env.DAMASQAS_DATA_DIR) env.dataDir = process.env.DAMASQAS_DATA_DIR;
 

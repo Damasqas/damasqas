@@ -5,6 +5,7 @@ import type { AnomalyDetector } from './anomaly.js';
 import type { AlertEngine } from './alert-engine.js';
 import type { QueueSnapshot, QueueMetrics, DrainAnalysis } from './types.js';
 import { DrainAnalyzer } from './drain.js';
+import { RedisHealthCollector } from './redis-health.js';
 
 /**
  * Unified polling loop. Runs at pollInterval (default 1s) and orchestrates:
@@ -30,12 +31,14 @@ export class Collector {
   private tickCount = 0;
   private discoveryEveryNTicks: number;
   private analysisEveryNTicks: number;
+  private redisKeyMemoryUsage: boolean;
 
   // Separate map to track the snapshot used as the basis for the last
   // metrics row. This prevents the bug where previousSnapshots gets
   // overwritten every tick but metrics only compute every Nth tick.
   private lastAnalysisSnapshots = new Map<string, QueueSnapshot>();
   private drainAnalyzer = new DrainAnalyzer();
+  private redisHealthCollector: RedisHealthCollector;
 
   constructor(
     adapter: QueueAdapter,
@@ -46,6 +49,7 @@ export class Collector {
     pollIntervalSeconds: number,
     discoveryIntervalSeconds: number,
     verbose = false,
+    redisKeyMemoryUsage = true,
   ) {
     this.adapter = adapter;
     this.store = store;
@@ -54,6 +58,7 @@ export class Collector {
     this.alertEngine = alertEngine;
     this.pollInterval = pollIntervalSeconds * 1000;
     this.verbose = verbose;
+    this.redisKeyMemoryUsage = redisKeyMemoryUsage;
 
     // Discovery runs every M ticks (default: 60s / 1s = every 60th tick)
     this.discoveryEveryNTicks = Math.max(1, Math.round(discoveryIntervalSeconds / pollIntervalSeconds));
@@ -62,6 +67,9 @@ export class Collector {
     // Target: ~10s cadence. If pollInterval >= 10s, run every tick.
     const ANALYSIS_INTERVAL_SECONDS = 10;
     this.analysisEveryNTicks = Math.max(1, Math.round(ANALYSIS_INTERVAL_SECONDS / pollIntervalSeconds));
+
+    // Redis health collector runs at analysis cadence with its own sub-cadences
+    this.redisHealthCollector = new RedisHealthCollector(ANALYSIS_INTERVAL_SECONDS);
   }
 
   getAnalysisEveryNTicks(): number {
@@ -153,6 +161,18 @@ export class Collector {
             console.error('[collector] Alert evaluation error:', err);
           }
         }
+
+        // Redis health collection (has its own sub-cadences: 10s/5m/30m)
+        try {
+          await this.redisHealthCollector.collect(
+            this.adapter,
+            this.store,
+            queues,
+            this.redisKeyMemoryUsage,
+          );
+        } catch (err) {
+          console.error('[collector] Redis health collection error:', err);
+        }
       }
     } catch (err) {
       console.error('[collector] Tick failed:', err);
@@ -225,6 +245,11 @@ export class Collector {
   /** Get the drain analyzer instance (for alert engine integration). */
   getDrainAnalyzer(): DrainAnalyzer {
     return this.drainAnalyzer;
+  }
+
+  /** Get the Redis health collector instance (for API and alert engine). */
+  getRedisHealthCollector(): RedisHealthCollector {
+    return this.redisHealthCollector;
   }
 
   async sampleProcessingTimes(queues: string[]): Promise<void> {

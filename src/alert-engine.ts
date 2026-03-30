@@ -2,6 +2,7 @@ import type { MetricsStore } from './store.js';
 import type { QueueAdapter } from './adapters/types.js';
 import type { DamasqasConfig, QueueSnapshot, AlertRule } from './types.js';
 import type { DrainAnalyzer } from './drain.js';
+import type { RedisHealthCollector } from './redis-health.js';
 
 interface AlertRuleConfig {
   threshold?: number;
@@ -26,6 +27,7 @@ export class AlertEngine {
   private config: DamasqasConfig;
   private verbose: boolean;
   private drainAnalyzer: DrainAnalyzer | null = null;
+  private redisHealthCollector: RedisHealthCollector | null = null;
 
   constructor(
     store: MetricsStore,
@@ -42,6 +44,11 @@ export class AlertEngine {
   /** Set the drain analyzer reference for enhanced drain_negative alerts. */
   setDrainAnalyzer(analyzer: DrainAnalyzer): void {
     this.drainAnalyzer = analyzer;
+  }
+
+  /** Set the Redis health collector for enhanced redis_memory alerts. */
+  setRedisHealthCollector(collector: RedisHealthCollector): void {
+    this.redisHealthCollector = collector;
   }
 
   async evaluate(queues: string[], snapshots: QueueSnapshot[]): Promise<void> {
@@ -193,6 +200,42 @@ export class AlertEngine {
       }
     }
 
+    // Enrich redis_memory alerts with OOM projection and growth data
+    let redisContext: unknown = undefined;
+    if (rule.type === 'redis_memory' && this.redisHealthCollector) {
+      try {
+        const recentSnapshots = this.store.getRecentRedisSnapshots(60);
+        const oomProjection = this.redisHealthCollector.projectOOM(recentSnapshots);
+        const currentSizes = this.store.getLatestKeySizes();
+        const previousSizes = currentSizes.length > 0
+          ? this.store.getPreviousKeySizes(currentSizes[0]!.ts)
+          : [];
+        const growth = this.redisHealthCollector.attributeGrowth(currentSizes, previousSizes);
+        const latest = recentSnapshots.length > 0 ? recentSnapshots[recentSnapshots.length - 1]! : null;
+        const memoryPercent = latest && latest.maxmemory > 0
+          ? Math.round((latest.usedMemory / latest.maxmemory) * 100)
+          : null;
+
+        redisContext = {
+          usedMemory: latest?.usedMemory,
+          maxmemory: latest?.maxmemory,
+          memoryPercent,
+          hoursUntilOOM: oomProjection.hoursUntilOOM,
+          growthRateMBPerHour: oomProjection.growthRateMBPerHour,
+          topGrowthContributors: growth.slice(0, 5).map((g) => ({
+            queue: g.queue,
+            keyType: g.keyType,
+            entries: g.entries,
+            entryDelta: g.entryDelta,
+            memoryBytes: g.memoryBytes,
+            memoryDelta: g.memoryDelta,
+          })),
+        };
+      } catch {
+        // Non-critical — proceed without enrichment
+      }
+    }
+
     // Enrich with drain analysis when applicable
     let drainContext: unknown = undefined;
     if (rule.type === 'drain_negative' && this.drainAnalyzer) {
@@ -233,6 +276,7 @@ export class AlertEngine {
       },
       ...(overdueContext ? { overdueDelayed: overdueContext } : {}),
       ...(drainContext ? { drain: drainContext } : {}),
+      ...(redisContext ? { redis: redisContext } : {}),
       config: ruleConfig,
       firedAt: now,
     });
