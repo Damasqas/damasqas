@@ -16,6 +16,7 @@ export class BullMQAdapter implements QueueAdapter {
   private prefix: string;
   private queueInstances = new Map<string, Queue>();
   private clockSkewMs = 0;
+  private hasBullMQMetrics = new Map<string, boolean>();
 
   constructor(redisUrl: string, prefix = 'bull') {
     const connOpts = { maxRetriesPerRequest: null };
@@ -47,6 +48,60 @@ export class BullMQAdapter implements QueueAdapter {
       }
     } catch {
       // Non-critical — proceed without skew compensation
+    }
+  }
+
+  /**
+   * Check which queues have BullMQ built-in metrics enabled.
+   * Caches the result per queue so we only run EXISTS once per queue.
+   */
+  async checkBullMQMetrics(queues: string[]): Promise<void> {
+    const unchecked = queues.filter((q) => !this.hasBullMQMetrics.has(q));
+    if (unchecked.length === 0) return;
+
+    const p = this.cmd.pipeline();
+    for (const queue of unchecked) {
+      p.exists(`${this.prefix}:${queue}:metrics:completed`);
+    }
+    const results = await p.exec();
+    if (!results) return;
+
+    for (let i = 0; i < unchecked.length; i++) {
+      const [err, val] = results[i]!;
+      this.hasBullMQMetrics.set(unchecked[i]!, !err && val === 1);
+    }
+  }
+
+  /**
+   * Get throughput from BullMQ built-in metrics (if enabled).
+   * Returns the latest 1-minute completed and failed counts, or null if unavailable.
+   */
+  async getBullMQThroughput(queue: string): Promise<{ completed: number; failed: number } | null> {
+    if (!this.hasBullMQMetrics.get(queue)) return null;
+
+    try {
+      const p = this.cmd.pipeline();
+      // BullMQ v5 stores metric data in a LIST at the :data suffix.
+      // The key without :data is a HASH with metadata (count, prevTS, prevCount).
+      p.lrange(`${this.prefix}:${queue}:metrics:completed:data`, 0, 0);
+      p.lrange(`${this.prefix}:${queue}:metrics:failed:data`, 0, 0);
+      const results = await p.exec();
+      if (!results) return null;
+
+      const [errC, completedList] = results[0]!;
+      const [errF, failedList] = results[1]!;
+      if (errC || errF) return null;
+
+      const completed = (completedList as string[]).length > 0
+        ? parseInt((completedList as string[])[0]!, 10) || 0
+        : 0;
+      const failed = (failedList as string[]).length > 0
+        ? parseInt((failedList as string[])[0]!, 10) || 0
+        : 0;
+
+      return { completed, failed };
+    } catch {
+      return null;
     }
   }
 

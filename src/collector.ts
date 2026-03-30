@@ -3,7 +3,8 @@ import type { MetricsStore } from './store.js';
 import type { Discovery } from './discovery.js';
 import type { AnomalyDetector } from './anomaly.js';
 import type { AlertEngine } from './alert-engine.js';
-import type { QueueSnapshot, QueueMetrics } from './types.js';
+import type { QueueSnapshot, QueueMetrics, DrainAnalysis } from './types.js';
+import { DrainAnalyzer } from './drain.js';
 
 /**
  * Unified polling loop. Runs at pollInterval (default 1s) and orchestrates:
@@ -34,6 +35,7 @@ export class Collector {
   // metrics row. This prevents the bug where previousSnapshots gets
   // overwritten every tick but metrics only compute every Nth tick.
   private lastAnalysisSnapshots = new Map<string, QueueSnapshot>();
+  private drainAnalyzer = new DrainAnalyzer();
 
   constructor(
     adapter: QueueAdapter,
@@ -73,6 +75,12 @@ export class Collector {
       // 1. Queue discovery refresh (every Mth tick, default ~60s)
       if (this.tickCount % this.discoveryEveryNTicks === 0) {
         await this.discovery.scan();
+        // Check for BullMQ built-in metrics on discovered queues
+        try {
+          await this.adapter.checkBullMQMetrics(this.discovery.getQueues());
+        } catch {
+          // Non-critical
+        }
         if (this.verbose) {
           console.log(`[collector] Discovery refresh: ${this.discovery.getQueues().length} queues`);
         }
@@ -118,6 +126,16 @@ export class Collector {
             this.store.insertMetrics(metrics);
           }
           this.lastAnalysisSnapshots.set(snapshot.queue, snapshot);
+          this.drainAnalyzer.pushSnapshot(snapshot);
+        }
+
+        // Drain analysis
+        try {
+          for (const snapshot of snapshots) {
+            await this.drainAnalyzer.analyzeDrain(snapshot.queue, this.adapter);
+          }
+        } catch (err) {
+          console.error('[collector] Drain analysis error:', err);
         }
 
         // Anomaly detection
@@ -158,6 +176,7 @@ export class Collector {
       this.store.insertSnapshot(snapshot);
       this.previousSnapshots.set(snapshot.queue, snapshot);
       this.lastAnalysisSnapshots.set(snapshot.queue, snapshot);
+      this.drainAnalyzer.pushSnapshot(snapshot);
     }
   }
 
@@ -196,6 +215,16 @@ export class Collector {
       avgProcessingMs: null,
       backlogGrowthRate,
     };
+  }
+
+  /** Get the latest drain analysis for a queue. */
+  getDrainAnalysis(queue: string): DrainAnalysis | null {
+    return this.drainAnalyzer.getDrainAnalysis(queue);
+  }
+
+  /** Get the drain analyzer instance (for alert engine integration). */
+  getDrainAnalyzer(): DrainAnalyzer {
+    return this.drainAnalyzer;
   }
 
   async sampleProcessingTimes(queues: string[]): Promise<void> {

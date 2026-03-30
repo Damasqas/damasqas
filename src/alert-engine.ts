@@ -1,6 +1,7 @@
 import type { MetricsStore } from './store.js';
 import type { QueueAdapter } from './adapters/types.js';
 import type { DamasqasConfig, QueueSnapshot, AlertRule } from './types.js';
+import type { DrainAnalyzer } from './drain.js';
 
 interface AlertRuleConfig {
   threshold?: number;
@@ -24,6 +25,7 @@ export class AlertEngine {
   private adapter: QueueAdapter;
   private config: DamasqasConfig;
   private verbose: boolean;
+  private drainAnalyzer: DrainAnalyzer | null = null;
 
   constructor(
     store: MetricsStore,
@@ -35,6 +37,11 @@ export class AlertEngine {
     this.adapter = adapter;
     this.config = config;
     this.verbose = verbose;
+  }
+
+  /** Set the drain analyzer reference for enhanced drain_negative alerts. */
+  setDrainAnalyzer(analyzer: DrainAnalyzer): void {
+    this.drainAnalyzer = analyzer;
   }
 
   async evaluate(queues: string[], snapshots: QueueSnapshot[]): Promise<void> {
@@ -130,8 +137,19 @@ export class AlertEngine {
       }
 
       case 'drain_negative': {
-        // Drain rate = throughput - new jobs per minute
-        // If drain is negative, backlog is growing
+        // Use drain analyzer if available for more accurate analysis
+        if (this.drainAnalyzer) {
+          const analysis = this.drainAnalyzer.getDrainAnalysis(queue);
+          if (analysis) {
+            // Fire when queue has been growing for 5+ consecutive intervals
+            // and trend is actually 'growing' (netRate < -1) or 'stalled'.
+            // This aligns with the trend classification thresholds in DrainAnalyzer.
+            const consecutiveGrowth = this.drainAnalyzer.getConsecutiveGrowthCount(queue);
+            const isGrowing = analysis.trend === 'growing' || analysis.trend === 'stalled';
+            return consecutiveGrowth >= 5 && isGrowing && analysis.netRate < -threshold;
+          }
+        }
+        // Fallback to basic metrics check
         const latest = this.store.getLatestMetrics(queue);
         if (latest) {
           return latest.backlogGrowthRate > threshold;
@@ -175,6 +193,30 @@ export class AlertEngine {
       }
     }
 
+    // Enrich with drain analysis when applicable
+    let drainContext: unknown = undefined;
+    if (rule.type === 'drain_negative' && this.drainAnalyzer) {
+      const analysis = this.drainAnalyzer.getDrainAnalysis(queue);
+      if (analysis) {
+        const consecutiveGrowth = this.drainAnalyzer.getConsecutiveGrowthCount(queue);
+        drainContext = {
+          currentDepth: analysis.currentDepth,
+          inflowRate: analysis.inflowRate,
+          drainRate: analysis.drainRate,
+          netRate: analysis.netRate,
+          projectedDrainMinutes: analysis.projectedDrainMinutes,
+          capacityDeficit: analysis.capacityDeficit,
+          trend: analysis.trend,
+          consecutiveGrowthIntervals: consecutiveGrowth,
+          message: `Queue ${queue} has been growing for ${consecutiveGrowth} consecutive intervals. ` +
+            `Depth: ${analysis.currentDepth}. Net growth: ${Math.round(Math.abs(analysis.netRate))} jobs/min. ` +
+            (analysis.capacityDeficit > 0
+              ? `Need ${analysis.capacityDeficit}% more processing capacity to stabilize.`
+              : ''),
+        };
+      }
+    }
+
     const payload = JSON.stringify({
       ruleId: rule.id,
       ruleName: rule.name,
@@ -190,6 +232,7 @@ export class AlertEngine {
         failRate1m: snapshot.failRate1m,
       },
       ...(overdueContext ? { overdueDelayed: overdueContext } : {}),
+      ...(drainContext ? { drain: drainContext } : {}),
       config: ruleConfig,
       firedAt: now,
     });

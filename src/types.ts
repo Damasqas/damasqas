@@ -197,6 +197,19 @@ export interface QueueState {
   };
   overdueDelayed: number;
   anomalies: AnomalyRecord[];
+  drain: DrainAnalysis | null;
+}
+
+export interface DrainAnalysis {
+  queue: string;
+  currentDepth: number;
+  depthDelta: number;           // change since last snapshot (positive = growing)
+  inflowRate: number;           // jobs entering wait per minute
+  drainRate: number;            // jobs leaving wait per minute (= throughput)
+  netRate: number;              // drainRate - inflowRate (positive = draining)
+  projectedDrainMinutes: number | null;  // null if netRate <= 0 (will never drain)
+  capacityDeficit: number;      // percentage more processing capacity needed (0 if draining)
+  trend: 'draining' | 'stable' | 'growing' | 'stalled';
 }
 
 export interface OverdueDelayedJob {

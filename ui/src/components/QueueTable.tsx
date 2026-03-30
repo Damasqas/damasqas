@@ -11,6 +11,13 @@ const statusColors: Record<string, string> = {
   critical: '#ff3333',
 };
 
+const trendConfig: Record<string, { symbol: string; color: string; label: string }> = {
+  draining: { symbol: '\u2193', color: '#22c55e', label: 'Draining' },
+  growing: { symbol: '\u2191', color: '#ff3333', label: 'Growing' },
+  stable: { symbol: '\u2014', color: '#666', label: 'Stable' },
+  stalled: { symbol: '\u23F8', color: '#ff3333', label: 'Stalled' },
+};
+
 export function QueueTable({ queues, onSelect }: QueueTableProps) {
   return (
     <div style={{
@@ -22,7 +29,7 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            {['Queue', 'Status', 'Throughput', 'Failures', 'Waiting', 'Active', 'Locks', 'Stalled', 'Overdue'].map((h) => (
+            {['Queue', 'Status', 'Throughput', 'Failures', 'Waiting', 'Trend', 'Active', 'Locks', 'Stalled', 'Overdue'].map((h) => (
               <th key={h} style={{
                 padding: '12px 16px',
                 textAlign: 'left',
@@ -84,6 +91,9 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
                 {q.counts.waiting.toLocaleString()}
               </td>
               <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
+                <TrendCell drain={q.drain} />
+              </td>
+              <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
                 {q.counts.active}
               </td>
               <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
@@ -115,5 +125,24 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
         </div>
       )}
     </div>
+  );
+}
+
+function TrendCell({ drain }: { drain: QueueState['drain'] }) {
+  if (!drain) {
+    return <span style={{ color: '#666' }}>{'\u2014'}</span>;
+  }
+
+  const t = trendConfig[drain.trend] || trendConfig.stable!;
+  const tooltip = drain.projectedDrainMinutes !== null
+    ? `Clears in ~${Math.round(drain.projectedDrainMinutes)}m`
+    : drain.capacityDeficit > 0
+      ? `Need ${drain.capacityDeficit}% more capacity`
+      : t.label;
+
+  return (
+    <span title={tooltip} style={{ color: t.color, fontWeight: 600 }}>
+      {t.symbol}
+    </span>
   );
 }

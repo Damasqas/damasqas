@@ -7,6 +7,7 @@ import type { Discovery } from './discovery.js';
 import type { MetricsStore } from './store.js';
 import type { QueueAdapter } from './adapters/types.js';
 import type { Operations } from './operations.js';
+import type { Collector } from './collector.js';
 import { healthRoutes } from './routes/health.js';
 import { queueRoutes } from './routes/queues.js';
 import { metricsRoutes } from './routes/metrics.js';
@@ -26,6 +27,7 @@ export function createServer(
   ops: Operations,
   startTime: number,
   noDashboard: boolean,
+  collector?: Collector,
 ) {
   const app = express();
 
@@ -34,7 +36,7 @@ export function createServer(
 
   // API routes
   app.use('/api', healthRoutes(discovery, startTime));
-  app.use('/api', queueRoutes(discovery, store, adapter));
+  app.use('/api', queueRoutes(discovery, store, adapter, collector));
   app.use('/api', metricsRoutes(store));
   app.use('/api', jobRoutes(adapter));
   app.use('/api', anomalyRoutes(store));

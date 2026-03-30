@@ -96,10 +96,18 @@ async function start(config: DamasqasConfig): Promise<void> {
     config.verbose,
   );
 
+  // Connect drain analyzer to alert engine for enhanced drain_negative alerts
+  alertEngine.setDrainAnalyzer(collector.getDrainAnalyzer());
+
   // Initial discovery
   console.log('[damasqas] Discovering queues...');
   const queues = await discovery.initialScan();
   console.log(`[damasqas] Found ${queues.length} queues: ${queues.join(', ') || '(none)'}`);
+
+  // Warm BullMQ metrics cache for discovered queues
+  if (queues.length > 0) {
+    await adapter.checkBullMQMetrics(queues);
+  }
 
   discovery.on('queue:added', (name: string) => {
     console.log(`[damasqas] New queue discovered: ${name}`);
@@ -184,7 +192,7 @@ async function start(config: DamasqasConfig): Promise<void> {
   }, collector.getAnalysisEveryNTicks() * config.pollInterval * 1000);
 
   // Start API server
-  const app = createServer(discovery, store, adapter, ops, startTime, config.noDashboard);
+  const app = createServer(discovery, store, adapter, ops, startTime, config.noDashboard, collector);
   const server = app.listen(config.port, () => {
     if (!config.noDashboard) {
       console.log(`[damasqas] Dashboard: http://localhost:${config.port}`);
