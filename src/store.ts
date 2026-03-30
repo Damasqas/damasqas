@@ -13,9 +13,11 @@ import type {
   RedisSnapshot,
   RedisKeySize,
   SlowlogEntry,
+  JobTimingRecord,
+  JobTypeBreakdown,
 } from './types.js';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 export class MetricsStore {
   private db: Database.Database;
@@ -59,6 +61,9 @@ export class MetricsStore {
     }
     if (currentVersion < 5) {
       this.migrateV5();
+    }
+    if (currentVersion < 6) {
+      this.migrateV6();
     }
 
     if (!row) {
@@ -284,6 +289,35 @@ export class MetricsStore {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_events_unhydrated
         ON events(queue, job_id) WHERE job_name IS NULL;
+    `);
+  }
+
+  /** V6: Job type breakdown — timing data and per-type summaries */
+  private migrateV6(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS job_timings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        queue TEXT NOT NULL,
+        job_name TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        wait_ms INTEGER NOT NULL,
+        process_ms INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_timings_queue_name_ts ON job_timings(queue, job_name, ts);
+      CREATE INDEX IF NOT EXISTS idx_timings_queue_jobid ON job_timings(queue, job_id);
+
+      CREATE TABLE IF NOT EXISTS job_type_summaries (
+        queue TEXT NOT NULL,
+        job_name TEXT NOT NULL,
+        minute_ts INTEGER NOT NULL,
+        completed INTEGER NOT NULL,
+        failed INTEGER NOT NULL,
+        avg_wait_ms REAL,
+        avg_process_ms REAL,
+        p95_process_ms REAL,
+        PRIMARY KEY (queue, job_name, minute_ts)
+      );
     `);
   }
 
@@ -712,6 +746,234 @@ export class MetricsStore {
           ftsDelete.run(row.id, row.job_id, row.job_name, row.queue, row.event_type, row.data);
           ftsInsert.run(row.id, row.job_id, jobName, row.queue, row.event_type, row.data);
         }
+      }
+    });
+    tx();
+  }
+
+  // ── Job Timing Methods ───────────────────────────────────────────────
+
+  insertJobTiming(timing: JobTimingRecord): void {
+    this.db.prepare(`
+      INSERT INTO job_timings (queue, job_name, job_id, ts, wait_ms, process_ms)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(timing.queue, timing.jobName, timing.jobId, timing.ts, timing.waitMs, timing.processMs);
+  }
+
+  batchInsertJobTimings(timings: JobTimingRecord[]): void {
+    if (timings.length === 0) return;
+    const stmt = this.db.prepare(`
+      INSERT INTO job_timings (queue, job_name, job_id, ts, wait_ms, process_ms)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const tx = this.db.transaction(() => {
+      for (const t of timings) {
+        stmt.run(t.queue, t.jobName, t.jobId, t.ts, t.waitMs, t.processMs);
+      }
+    });
+    tx();
+  }
+
+  /**
+   * Find completed events that haven't been timing-hydrated yet.
+   * Uses LEFT JOIN against job_timings to find events without a matching row.
+   * Bounded to the last hour since tiered event retention deletes completed
+   * events after 1 hour anyway — no point scanning older data.
+   */
+  getUnhydratedTimingEvents(queue: string, limit = 200): { id: number; queue: string; jobId: string; jobName: string; ts: number }[] {
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    return this.db.prepare(`
+      SELECT e.id, e.queue, e.job_id as jobId, e.job_name as jobName, e.ts
+      FROM events e
+      LEFT JOIN job_timings jt ON e.queue = jt.queue AND e.job_id = jt.job_id
+      WHERE e.queue = ? AND e.event_type = 'completed' AND e.job_name IS NOT NULL AND e.ts >= ? AND jt.id IS NULL
+      LIMIT ?
+    `).all(queue, oneHourAgo, limit) as { id: number; queue: string; jobId: string; jobName: string; ts: number }[];
+  }
+
+  /**
+   * Get per-job-type breakdown for a queue within a time range.
+   * Combines failure rates from events table with timing stats from job_timings.
+   */
+  getJobTypeBreakdown(queue: string, since: number, until: number): JobTypeBreakdown[] {
+    // Get failure rates from events table
+    const eventRows = this.db.prepare(`
+      SELECT
+        job_name,
+        COUNT(*) FILTER (WHERE event_type = 'completed') as completed,
+        COUNT(*) FILTER (WHERE event_type = 'failed') as failed
+      FROM events
+      WHERE queue = ? AND ts >= ? AND ts <= ? AND event_type IN ('completed', 'failed') AND job_name IS NOT NULL
+      GROUP BY job_name
+      ORDER BY failed DESC
+    `).all(queue, since, until) as { job_name: string; completed: number; failed: number }[];
+
+    // Get timing averages from job_timings table.
+    // Filter wait_ms >= 0 to exclude sentinel rows (-1) inserted when
+    // the job hash was already deleted from Redis (removeOnComplete).
+    const timingRows = this.db.prepare(`
+      SELECT
+        job_name,
+        AVG(wait_ms) as avg_wait_ms,
+        AVG(process_ms) as avg_process_ms
+      FROM job_timings
+      WHERE queue = ? AND ts >= ? AND ts <= ? AND wait_ms >= 0
+      GROUP BY job_name
+    `).all(queue, since, until) as { job_name: string; avg_wait_ms: number | null; avg_process_ms: number | null }[];
+
+    const timingMap = new Map(timingRows.map((r) => [r.job_name, r]));
+
+    // Compute p95 per job type (Option A: application code)
+    const p95Map = new Map<string, number>();
+    const jobNames = eventRows.map((r) => r.job_name);
+    for (const jobName of jobNames) {
+      const processTimes = this.db.prepare(
+        'SELECT process_ms FROM job_timings WHERE queue = ? AND job_name = ? AND ts >= ? AND ts <= ? AND wait_ms >= 0 ORDER BY process_ms',
+      ).all(queue, jobName, since, until) as { process_ms: number }[];
+      if (processTimes.length > 0) {
+        const idx = Math.floor(processTimes.length * 0.95);
+        p95Map.set(jobName, processTimes[Math.min(idx, processTimes.length - 1)]!.process_ms);
+      }
+    }
+
+    return eventRows.map((r) => {
+      const total = r.completed + r.failed;
+      const timing = timingMap.get(r.job_name);
+      return {
+        jobName: r.job_name,
+        completed: r.completed,
+        failed: r.failed,
+        failRatePct: total > 0 ? Math.round(r.failed * 1000 / total) / 10 : 0,
+        avgWaitMs: timing?.avg_wait_ms ? Math.round(timing.avg_wait_ms) : null,
+        avgProcessMs: timing?.avg_process_ms ? Math.round(timing.avg_process_ms) : null,
+        p95ProcessMs: p95Map.get(r.job_name) ?? null,
+      };
+    });
+  }
+
+  /**
+   * Get per-job-type breakdown from pre-aggregated summaries (for longer time ranges).
+   */
+  getJobTypeBreakdownFromSummaries(queue: string, since: number, until: number): JobTypeBreakdown[] {
+    const rows = this.db.prepare(`
+      SELECT
+        job_name,
+        SUM(completed) as completed,
+        SUM(failed) as failed,
+        SUM(COALESCE(avg_wait_ms, 0) * completed) / NULLIF(SUM(CASE WHEN avg_wait_ms IS NOT NULL THEN completed ELSE 0 END), 0) as avg_wait_ms,
+        SUM(COALESCE(avg_process_ms, 0) * completed) / NULLIF(SUM(CASE WHEN avg_process_ms IS NOT NULL THEN completed ELSE 0 END), 0) as avg_process_ms,
+        MAX(p95_process_ms) as p95_process_ms
+      FROM job_type_summaries
+      WHERE queue = ? AND minute_ts >= ? AND minute_ts <= ?
+      GROUP BY job_name
+      ORDER BY failed DESC
+    `).all(queue, since, until) as {
+      job_name: string;
+      completed: number;
+      failed: number;
+      avg_wait_ms: number | null;
+      avg_process_ms: number | null;
+      p95_process_ms: number | null;
+    }[];
+
+    return rows.map((r) => {
+      const total = r.completed + r.failed;
+      return {
+        jobName: r.job_name,
+        completed: r.completed,
+        failed: r.failed,
+        failRatePct: total > 0 ? Math.round(r.failed * 1000 / total) / 10 : 0,
+        avgWaitMs: r.avg_wait_ms ? Math.round(r.avg_wait_ms) : null,
+        avgProcessMs: r.avg_process_ms ? Math.round(r.avg_process_ms) : null,
+        p95ProcessMs: r.p95_process_ms ? Math.round(r.p95_process_ms) : null,
+      };
+    });
+  }
+
+  /**
+   * Aggregate raw job_timings + events into per-minute job_type_summaries.
+   * Called every ~60 seconds by the collector.
+   */
+  aggregateJobTypeSummaries(since: number, until: number): void {
+    // Get per-minute event counts
+    const eventRows = this.db.prepare(`
+      SELECT
+        queue, job_name,
+        (ts / 60000) * 60000 as minute_ts,
+        COUNT(*) FILTER (WHERE event_type = 'completed') as completed,
+        COUNT(*) FILTER (WHERE event_type = 'failed') as failed
+      FROM events
+      WHERE ts >= ? AND ts <= ? AND event_type IN ('completed', 'failed') AND job_name IS NOT NULL
+      GROUP BY queue, job_name, minute_ts
+    `).all(since, until) as {
+      queue: string; job_name: string; minute_ts: number;
+      completed: number; failed: number;
+    }[];
+
+    // Get per-minute timing averages (exclude sentinel rows from deleted hashes)
+    const timingRows = this.db.prepare(`
+      SELECT
+        queue, job_name,
+        (ts / 60000) * 60000 as minute_ts,
+        AVG(wait_ms) as avg_wait_ms,
+        AVG(process_ms) as avg_process_ms
+      FROM job_timings
+      WHERE ts >= ? AND ts <= ? AND wait_ms >= 0
+      GROUP BY queue, job_name, minute_ts
+    `).all(since, until) as {
+      queue: string; job_name: string; minute_ts: number;
+      avg_wait_ms: number | null; avg_process_ms: number | null;
+    }[];
+
+    // Build a nested lookup: timingLookup[queue][job_name][minute_ts] -> timing row
+    const timingLookup = new Map<string, Map<string, Map<number, typeof timingRows[0]>>>();
+    for (const r of timingRows) {
+      if (!timingLookup.has(r.queue)) timingLookup.set(r.queue, new Map());
+      const qMap = timingLookup.get(r.queue)!;
+      if (!qMap.has(r.job_name)) qMap.set(r.job_name, new Map());
+      qMap.get(r.job_name)!.set(r.minute_ts, r);
+    }
+
+    // Compute p95 per (queue, job_name, minute) bucket
+    const p95Lookup = new Map<string, Map<string, Map<number, number>>>();
+    const p95Stmt = this.db.prepare(
+      'SELECT process_ms FROM job_timings WHERE queue = ? AND job_name = ? AND ts >= ? AND ts < ? AND wait_ms >= 0 ORDER BY process_ms',
+    );
+
+    // Deduplicate buckets to avoid redundant queries
+    const seen = new Set<string>();
+    for (const r of eventRows) {
+      const bucketKey = JSON.stringify([r.queue, r.job_name, r.minute_ts]);
+      if (seen.has(bucketKey)) continue;
+      seen.add(bucketKey);
+
+      const processTimes = p95Stmt.all(r.queue, r.job_name, r.minute_ts, r.minute_ts + 60000) as { process_ms: number }[];
+      if (processTimes.length > 0) {
+        const idx = Math.floor(processTimes.length * 0.95);
+        const p95 = processTimes[Math.min(idx, processTimes.length - 1)]!.process_ms;
+        if (!p95Lookup.has(r.queue)) p95Lookup.set(r.queue, new Map());
+        const qMap = p95Lookup.get(r.queue)!;
+        if (!qMap.has(r.job_name)) qMap.set(r.job_name, new Map());
+        qMap.get(r.job_name)!.set(r.minute_ts, p95);
+      }
+    }
+
+    const upsertStmt = this.db.prepare(`
+      INSERT OR REPLACE INTO job_type_summaries (queue, job_name, minute_ts, completed, failed, avg_wait_ms, avg_process_ms, p95_process_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const tx = this.db.transaction(() => {
+      for (const r of eventRows) {
+        const timing = timingLookup.get(r.queue)?.get(r.job_name)?.get(r.minute_ts);
+        const p95 = p95Lookup.get(r.queue)?.get(r.job_name)?.get(r.minute_ts);
+        upsertStmt.run(
+          r.queue, r.job_name, r.minute_ts,
+          r.completed, r.failed,
+          timing?.avg_wait_ms ?? null,
+          timing?.avg_process_ms ?? null,
+          p95 ?? null,
+        );
       }
     });
     tx();
@@ -1180,6 +1442,13 @@ export class MetricsStore {
     deleteEventsWithFts(oldEvents);
 
     this.db.prepare('DELETE FROM alert_fires WHERE ts < ?').run(cutoff);
+
+    // Job timings: keep raw data for 24 hours only
+    const timingCutoff = Date.now() - 24 * 60 * 60 * 1000;
+    this.db.prepare('DELETE FROM job_timings WHERE ts < ?').run(timingCutoff);
+
+    // Job type summaries: keep for full retention period
+    this.db.prepare('DELETE FROM job_type_summaries WHERE minute_ts < ?').run(cutoff);
 
     // Redis health tables
     this.db.prepare('DELETE FROM redis_snapshots WHERE ts < ?').run(cutoff);

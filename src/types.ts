@@ -267,3 +267,36 @@ export interface KeyGrowth {
   memoryDelta: number | null;
   recommendation: string | null;
 }
+
+// ── Job Type Breakdown Types ─────────────────────────────────────────
+
+export interface JobTimingRecord {
+  id?: number;
+  queue: string;
+  jobName: string;
+  jobId: string;
+  ts: number;
+  waitMs: number;
+  processMs: number;
+}
+
+export interface JobTypeSummary {
+  queue: string;
+  jobName: string;
+  minuteTs: number;
+  completed: number;
+  failed: number;
+  avgWaitMs: number | null;
+  avgProcessMs: number | null;
+  p95ProcessMs: number | null;
+}
+
+export interface JobTypeBreakdown {
+  jobName: string;
+  completed: number;
+  failed: number;
+  failRatePct: number;
+  avgWaitMs: number | null;
+  avgProcessMs: number | null;
+  p95ProcessMs: number | null;
+}

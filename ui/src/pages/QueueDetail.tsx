@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useQueue, usePauseQueue, useResumeQueue, usePromoteAllOverdue } from '../hooks/useQueues';
 import { useMetrics } from '../hooks/useMetrics';
+import { useJobTypes } from '../hooks/useJobTypes';
 import { useRetryAll } from '../hooks/useJobs';
 import { useToast } from '../components/Toast';
 import { StatCard } from '../components/StatCard';
 import { Chart } from '../components/Chart';
 import { CapacityPanel } from '../components/CapacityPanel';
+import { JobTypeTable } from '../components/JobTypeTable';
 
 interface QueueDetailProps {
   queue: string;
@@ -25,6 +27,7 @@ export function QueueDetail({ queue }: QueueDetailProps) {
   const { data: queueData } = useQueue(queue);
   const [range, setRange] = useState<Range>('1h');
   const { data: metricsData } = useMetrics(queue, range);
+  const { data: jobTypesData } = useJobTypes(queue, range);
   const { showToast } = useToast();
 
   const pauseMutation = usePauseQueue(queue);
@@ -166,6 +169,8 @@ export function QueueDetail({ queue }: QueueDetailProps) {
         <Chart data={waitingData} dataKey="waiting" title="Waiting Jobs" color="#f59e0b" domain={[since, until]} range={range} />
         <Chart data={waitingData} dataKey="active" title="Active Jobs" color="#3b82f6" domain={[since, until]} range={range} />
       </div>
+
+      <JobTypeTable breakdown={jobTypesData?.breakdown || []} />
     </div>
   );
 }
