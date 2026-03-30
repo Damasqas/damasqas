@@ -305,6 +305,7 @@ export class MetricsStore {
         process_ms INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_timings_queue_name_ts ON job_timings(queue, job_name, ts);
+      CREATE INDEX IF NOT EXISTS idx_timings_queue_jobid ON job_timings(queue, job_id);
 
       CREATE TABLE IF NOT EXISTS job_type_summaries (
         queue TEXT NOT NULL,

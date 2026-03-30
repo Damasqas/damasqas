@@ -26,9 +26,10 @@ export function jobTypeRoutes(store: MetricsStore): Router {
       const now = Date.now();
       const since = now - rangeMs;
 
-      // For short ranges (1h, 6h), query raw tables for real-time accuracy.
-      // For longer ranges (24h, 7d), use pre-aggregated summaries.
-      const breakdown = rangeMs <= 6 * 60 * 60 * 1000
+      // Raw event queries are only safe for 1h — the tiered event retention
+      // deletes completed events older than 1 hour. For longer ranges, use
+      // pre-aggregated summaries which preserve the counts.
+      const breakdown = rangeMs <= 60 * 60 * 1000
         ? store.getJobTypeBreakdown(queue, since, now)
         : store.getJobTypeBreakdownFromSummaries(queue, since, now);
 
