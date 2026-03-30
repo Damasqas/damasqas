@@ -32,6 +32,8 @@ export class Collector {
   private discoveryEveryNTicks: number;
   private analysisEveryNTicks: number;
   private redisKeyMemoryUsage: boolean;
+  private aggregationEveryNTicks: number;
+  private lastAggregationTs: number = 0;
 
   // Separate map to track the snapshot used as the basis for the last
   // metrics row. This prevents the bug where previousSnapshots gets
@@ -67,6 +69,10 @@ export class Collector {
     // Target: ~10s cadence. If pollInterval >= 10s, run every tick.
     const ANALYSIS_INTERVAL_SECONDS = 10;
     this.analysisEveryNTicks = Math.max(1, Math.round(ANALYSIS_INTERVAL_SECONDS / pollIntervalSeconds));
+
+    // Job type summary aggregation runs every ~60 seconds
+    const AGGREGATION_INTERVAL_SECONDS = 60;
+    this.aggregationEveryNTicks = Math.max(1, Math.round(AGGREGATION_INTERVAL_SECONDS / pollIntervalSeconds));
 
     // Redis health collector runs at analysis cadence with its own sub-cadences
     this.redisHealthCollector = new RedisHealthCollector(ANALYSIS_INTERVAL_SECONDS);
@@ -172,6 +178,19 @@ export class Collector {
           );
         } catch (err) {
           console.error('[collector] Redis health collection error:', err);
+        }
+      }
+
+      // Job type summary aggregation (every ~60 seconds)
+      if (this.tickCount % this.aggregationEveryNTicks === 0) {
+        try {
+          const now = Date.now();
+          // Aggregate the last 2 minutes of data (overlapping window to avoid gaps)
+          const aggregateSince = this.lastAggregationTs > 0 ? this.lastAggregationTs - 60000 : now - 120000;
+          this.store.aggregateJobTypeSummaries(aggregateSince, now);
+          this.lastAggregationTs = now;
+        } catch (err) {
+          console.error('[collector] Job type aggregation error:', err);
         }
       }
     } catch (err) {

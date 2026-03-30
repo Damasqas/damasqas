@@ -1,7 +1,7 @@
 import type { Redis } from 'ioredis';
 import type { MetricsStore } from './store.js';
 import type { Discovery } from './discovery.js';
-import type { EventRecord } from './types.js';
+import type { EventRecord, JobTimingRecord } from './types.js';
 
 /**
  * EventStreamConsumer uses a dedicated Redis connection to run blocking
@@ -27,6 +27,7 @@ export class EventStreamConsumer {
   private running = false;
   private verbose: boolean;
   private hydrateTimer: ReturnType<typeof setInterval> | null = null;
+  private timingTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     redis: Redis,
@@ -77,6 +78,13 @@ export class EventStreamConsumer {
         console.error('[event-stream] Hydration error:', err);
       });
     }, 5000);
+
+    // Start the job timing hydration loop (every 10 seconds)
+    this.timingTimer = setInterval(() => {
+      this.hydrateJobTimings().catch((err) => {
+        console.error('[event-stream] Timing hydration error:', err);
+      });
+    }, 10000);
   }
 
   stop(): void {
@@ -85,6 +93,10 @@ export class EventStreamConsumer {
     if (this.hydrateTimer) {
       clearInterval(this.hydrateTimer);
       this.hydrateTimer = null;
+    }
+    if (this.timingTimer) {
+      clearInterval(this.timingTimer);
+      this.timingTimer = null;
     }
 
     // Force-disconnect to interrupt any pending XREAD BLOCK.
@@ -268,6 +280,73 @@ export class EventStreamConsumer {
 
     if (this.verbose && updates.length > 0) {
       console.log(`[event-stream] Hydrated ${updates.length} job names across ${queues.length} queues`);
+    }
+  }
+
+  /**
+   * Batch-hydrate job timings for completed events that don't yet have
+   * timing data in the job_timings table. Fetches timestamp, processedOn,
+   * and finishedOn from Redis job hashes and computes wait/process times.
+   */
+  private async hydrateJobTimings(): Promise<void> {
+    const queues = this.discovery.getQueues();
+
+    // Collect all (queue, jobId) pairs for completed events without timings
+    const work: { id: number; queue: string; jobId: string; ts: number }[] = [];
+    for (const queue of queues) {
+      const events = this.store.getUnhydratedTimingEvents(queue);
+      for (const event of events) {
+        work.push(event);
+      }
+    }
+
+    if (work.length === 0) return;
+
+    // Single pipeline for all HMGET calls
+    const pipeline = this.cmdRedis.pipeline();
+    for (const { queue, jobId } of work) {
+      pipeline.hmget(`${this.prefix}:${queue}:${jobId}`, 'timestamp', 'processedOn', 'finishedOn', 'name');
+    }
+
+    const results = await pipeline.exec();
+    if (!results) return;
+
+    const timings: JobTimingRecord[] = [];
+    for (let i = 0; i < work.length; i++) {
+      const [err, fields] = results[i]!;
+      if (err || !fields) continue;
+
+      const [timestamp, processedOn, finishedOn, name] = fields as (string | null)[];
+      if (!timestamp || !processedOn || !finishedOn) continue;
+
+      const ts = Number(timestamp);
+      const processed = Number(processedOn);
+      const finished = Number(finishedOn);
+
+      if (isNaN(ts) || isNaN(processed) || isNaN(finished)) continue;
+
+      const waitMs = processed - ts;
+      const processMs = finished - processed;
+
+      // Skip clearly invalid values (negative or impossibly large)
+      if (waitMs < 0 || processMs < 0) continue;
+
+      timings.push({
+        queue: work[i]!.queue,
+        jobName: name || '[unknown]',
+        jobId: work[i]!.jobId,
+        ts: work[i]!.ts,
+        waitMs,
+        processMs,
+      });
+    }
+
+    if (timings.length > 0) {
+      this.store.batchInsertJobTimings(timings);
+
+      if (this.verbose) {
+        console.log(`[event-stream] Hydrated ${timings.length} job timings across ${queues.length} queues`);
+      }
     }
   }
 

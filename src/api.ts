@@ -18,6 +18,7 @@ import { redisRoutes } from './routes/redis.js';
 import { RedisHealthCollector } from './redis-health.js';
 import { alertRoutes } from './routes/alerts.js';
 import { eventRoutes } from './routes/events.js';
+import { jobTypeRoutes } from './routes/job-types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -46,6 +47,7 @@ export function createServer(
   app.use('/api', redisRoutes(adapter, store, redisHealthCollector));
   app.use('/api', alertRoutes(store));
   app.use('/api', eventRoutes(store));
+  app.use('/api', jobTypeRoutes(store));
 
   // Serve static dashboard UI
   // Published package: __dirname = dist/, UI at dist/ui/ → join(__dirname, 'ui')
