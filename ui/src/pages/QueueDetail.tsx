@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { useQueue } from '../hooks/useQueues';
+import { useQueue, usePauseQueue, useResumeQueue } from '../hooks/useQueues';
 import { useMetrics } from '../hooks/useMetrics';
+import { useRetryAll } from '../hooks/useJobs';
+import { useToast } from '../components/Toast';
 import { StatCard } from '../components/StatCard';
 import { Chart } from '../components/Chart';
 
@@ -9,10 +11,26 @@ interface QueueDetailProps {
   onSelectQueue: (name: string) => void;
 }
 
+type Range = '1h' | '6h' | '24h' | '7d';
+
+function formatTime(timestamp: number, range: Range): string {
+  const d = new Date(timestamp);
+  if (range === '7d') {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
 export function QueueDetail({ queue }: QueueDetailProps) {
   const { data: queueData } = useQueue(queue);
-  const [range, setRange] = useState<'1h' | '6h' | '24h' | '7d'>('1h');
+  const [range, setRange] = useState<Range>('1h');
   const { data: metricsData } = useMetrics(queue, range);
+  const { showToast } = useToast();
+
+  const pauseMutation = usePauseQueue(queue);
+  const resumeMutation = useResumeQueue(queue);
+  const retryAllMutation = useRetryAll(queue);
 
   if (!queueData) {
     return <div style={{ color: '#666', padding: 40 }}>Loading queue...</div>;
@@ -23,24 +41,35 @@ export function QueueDetail({ queue }: QueueDetailProps) {
   const snapshots = metricsData?.snapshots || [];
 
   const chartData = metrics.map((m) => ({
-    time: new Date(m.timestamp).toLocaleTimeString(),
+    time: formatTime(m.timestamp, range),
     throughput: m.throughput,
     failures: m.failureRate,
     processingTime: m.avgProcessingMs,
   }));
 
   const waitingData = snapshots.map((s) => ({
-    time: new Date(s.timestamp).toLocaleTimeString(),
+    time: formatTime(s.timestamp, range),
     waiting: s.waiting,
     active: s.active,
   }));
 
   const handlePause = () =>
-    fetch(`/api/queues/${encodeURIComponent(queue)}/pause`, { method: 'POST' });
+    pauseMutation.mutate(undefined, {
+      onSuccess: () => showToast('Queue paused'),
+      onError: () => showToast('Failed to pause queue', 'error'),
+    });
+
   const handleResume = () =>
-    fetch(`/api/queues/${encodeURIComponent(queue)}/resume`, { method: 'POST' });
+    resumeMutation.mutate(undefined, {
+      onSuccess: () => showToast('Queue resumed'),
+      onError: () => showToast('Failed to resume queue', 'error'),
+    });
+
   const handleRetryAll = () =>
-    fetch(`/api/queues/${encodeURIComponent(queue)}/retry-all`, { method: 'POST' });
+    retryAllMutation.mutate(undefined, {
+      onSuccess: () => showToast('Retrying all failed jobs'),
+      onError: () => showToast('Failed to retry jobs', 'error'),
+    });
 
   return (
     <div>

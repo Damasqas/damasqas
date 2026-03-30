@@ -76,11 +76,11 @@ export class Collector {
     const failedDelta = Math.max(0, current.failed - prev.failed);
     const waitingDelta = current.waiting - prev.waiting;
 
-    const throughput = completedDelta / elapsedMin;
-    const failureRate = failedDelta / elapsedMin;
+    const throughput = Math.round(completedDelta / elapsedMin);
+    const failureRate = Math.round(failedDelta / elapsedMin);
     const total = throughput + failureRate;
     const failureRatio = total > 0 ? failureRate / total : 0;
-    const backlogGrowthRate = waitingDelta / elapsedMin;
+    const backlogGrowthRate = Math.round(waitingDelta / elapsedMin);
 
     return {
       queue: current.queue,
