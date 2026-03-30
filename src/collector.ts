@@ -3,6 +3,7 @@ import type { MetricsStore } from './store.js';
 import type { Discovery } from './discovery.js';
 import type { AnomalyDetector } from './anomaly.js';
 import type { AlertEngine } from './alert-engine.js';
+import type { FlowInspector } from './flow.js';
 import type { QueueSnapshot, QueueMetrics, DrainAnalysis } from './types.js';
 import { DrainAnalyzer } from './drain.js';
 import { RedisHealthCollector } from './redis-health.js';
@@ -34,6 +35,8 @@ export class Collector {
   private redisKeyMemoryUsage: boolean;
   private aggregationEveryNTicks: number;
   private lastAggregationTs: number = 0;
+  private flowInspector: FlowInspector | null = null;
+  private deadlockEveryNTicks: number = 0;
 
   // Separate map to track the snapshot used as the basis for the last
   // metrics row. This prevents the bug where previousSnapshots gets
@@ -74,12 +77,24 @@ export class Collector {
     const AGGREGATION_INTERVAL_SECONDS = 60;
     this.aggregationEveryNTicks = Math.max(1, Math.round(AGGREGATION_INTERVAL_SECONDS / pollIntervalSeconds));
 
+    // Deadlock detection runs every ~5 minutes
+    const DEADLOCK_INTERVAL_SECONDS = 300;
+    this.deadlockEveryNTicks = Math.max(1, Math.round(DEADLOCK_INTERVAL_SECONDS / pollIntervalSeconds));
+
     // Redis health collector runs at analysis cadence with its own sub-cadences
     this.redisHealthCollector = new RedisHealthCollector(ANALYSIS_INTERVAL_SECONDS);
   }
 
   getAnalysisEveryNTicks(): number {
     return this.analysisEveryNTicks;
+  }
+
+  setFlowInspector(fi: FlowInspector): void {
+    this.flowInspector = fi;
+  }
+
+  getFlowInspector(): FlowInspector | null {
+    return this.flowInspector;
   }
 
   async tick(): Promise<void> {
@@ -191,6 +206,18 @@ export class Collector {
           this.lastAggregationTs = now;
         } catch (err) {
           console.error('[collector] Job type aggregation error:', err);
+        }
+      }
+
+      // Flow deadlock detection (every ~5 minutes)
+      if (this.flowInspector && this.tickCount % this.deadlockEveryNTicks === 0) {
+        try {
+          const deadlocks = await this.flowInspector.detectDeadlocks(queues);
+          if (deadlocks.length > 0 && this.verbose) {
+            console.log(`[collector] Detected ${deadlocks.length} flow deadlock(s)`);
+          }
+        } catch (err) {
+          console.error('[collector] Deadlock detection error:', err);
         }
       }
     } catch (err) {

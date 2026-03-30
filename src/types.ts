@@ -300,3 +300,50 @@ export interface JobTypeBreakdown {
   avgProcessMs: number | null;
   p95ProcessMs: number | null;
 }
+
+// ── Flow/Dependency Types ───────────────────────────────────────────
+
+export type FlowJobState =
+  | 'waiting'
+  | 'active'
+  | 'completed'
+  | 'failed'
+  | 'delayed'
+  | 'waiting-children'
+  | 'unknown';
+
+export interface FlowNode {
+  jobId: string;
+  queue: string;
+  name: string;
+  state: FlowJobState;
+  failedReason?: string;
+  attemptsMade: number;
+  maxAttempts: number;
+  children: FlowNode[];
+  isBlocker: boolean;
+  isDeadlocked: boolean;
+  truncated?: boolean;
+}
+
+export interface Deadlock {
+  parentQueue: string;
+  parentJobId: string;
+  parentName: string;
+  childQueue: string;
+  childJobId: string;
+  childName: string;
+  childError: string;
+  blockedSince: number;
+  hasFailParentOnFailure: boolean;
+}
+
+export interface WaitingChildrenJob {
+  queue: string;
+  jobId: string;
+  name: string;
+  timestamp: number;
+  pendingChildren: number;
+  failedChildren: number;
+  completedChildren: number;
+}
