@@ -103,7 +103,6 @@ export class Collector {
 
         this.store.insertSnapshot(snapshot);
         this.previousSnapshots.set(snapshot.queue, snapshot);
-        this.drainAnalyzer.pushSnapshot(snapshot);
 
         if (this.verbose) {
           console.log(
@@ -127,6 +126,7 @@ export class Collector {
             this.store.insertMetrics(metrics);
           }
           this.lastAnalysisSnapshots.set(snapshot.queue, snapshot);
+          this.drainAnalyzer.pushSnapshot(snapshot);
         }
 
         // Drain analysis

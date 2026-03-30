@@ -104,6 +104,11 @@ async function start(config: DamasqasConfig): Promise<void> {
   const queues = await discovery.initialScan();
   console.log(`[damasqas] Found ${queues.length} queues: ${queues.join(', ') || '(none)'}`);
 
+  // Warm BullMQ metrics cache for discovered queues
+  if (queues.length > 0) {
+    await adapter.checkBullMQMetrics(queues);
+  }
+
   discovery.on('queue:added', (name: string) => {
     console.log(`[damasqas] New queue discovered: ${name}`);
   });
