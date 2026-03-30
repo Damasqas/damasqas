@@ -1,3 +1,4 @@
+import type { Redis } from 'ioredis';
 import type {
   QueueSnapshot,
   FailedJob,
@@ -9,6 +10,8 @@ export interface QueueAdapter {
   discoverQueues(): Promise<string[]>;
 
   getSnapshot(queue: string): Promise<QueueSnapshot>;
+
+  getSnapshotBatch(queues: string[]): Promise<QueueSnapshot[]>;
 
   getRecentFailed(
     queue: string,
@@ -42,6 +45,10 @@ export interface QueueAdapter {
     queue: string,
     limit: number,
   ): Promise<number[]>;
+
+  // Connection accessors
+  getStreamConnection(): Redis;
+  getCmdConnection(): Redis;
 
   // Write operations
   pauseQueue(queue: string): Promise<void>;

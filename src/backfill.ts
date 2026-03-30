@@ -2,7 +2,6 @@ import type { QueueAdapter } from './adapters/types.js';
 import type { MetricsStore } from './store.js';
 
 const FIVE_MINUTES = 5 * 60 * 1000;
-const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
 
 export async function backfillQueue(
@@ -45,10 +44,16 @@ export async function backfillQueue(
       completed: cumulativeCompleted,
       failed: cumulativeFailed,
       delayed: 0,
+      prioritized: 0,
+      waitingChildren: 0,
       locks: 0,
       stalledCount: 0,
       oldestWaitingAge: null,
       paused: false,
+      throughput1m: null,
+      failRate1m: null,
+      avgProcessMs: null,
+      avgWaitMs: null,
     });
 
     // Insert derived metrics for each window

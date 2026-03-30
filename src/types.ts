@@ -6,10 +6,16 @@ export interface QueueSnapshot {
   completed: number;
   failed: number;
   delayed: number;
+  prioritized: number;
+  waitingChildren: number;
   locks: number;
   stalledCount: number;
   oldestWaitingAge: number | null;
   paused: boolean;
+  throughput1m: number | null;
+  failRate1m: number | null;
+  avgProcessMs: number | null;
+  avgWaitMs: number | null;
 }
 
 export interface QueueMetrics {
@@ -20,6 +26,63 @@ export interface QueueMetrics {
   failureRatio: number;
   avgProcessingMs: number | null;
   backlogGrowthRate: number;
+}
+
+export interface QueueRecord {
+  name: string;
+  prefix: string;
+  discoveredAt: number;
+  lastSeenAt: number;
+}
+
+export interface EventRecord {
+  id?: number;
+  queue: string;
+  eventType: string;
+  jobId: string;
+  jobName: string | null;
+  ts: number;
+  data: string | null;
+}
+
+export interface ErrorGroupRecord {
+  id?: number;
+  queue: string;
+  signature: string;
+  sampleError: string;
+  sampleJobId: string;
+  count: number;
+  firstSeen: number;
+  lastSeen: number;
+}
+
+export type AlertRuleType =
+  | 'failure_spike'
+  | 'depth_threshold'
+  | 'overdue_delayed'
+  | 'orphaned_active'
+  | 'redis_memory'
+  | 'drain_negative';
+
+export interface AlertRule {
+  id?: number;
+  name: string;
+  queue: string | null;
+  type: AlertRuleType;
+  config: string;
+  webhookUrl: string | null;
+  slackWebhook: string | null;
+  discordWebhook: string | null;
+  enabled: boolean;
+  cooldownSeconds: number;
+  lastFiredAt: number | null;
+}
+
+export interface AlertFire {
+  id?: number;
+  ruleId: number;
+  ts: number;
+  payload: string;
 }
 
 export interface FailedJob {
@@ -114,6 +177,8 @@ export interface QueueState {
     completed: number;
     failed: number;
     delayed: number;
+    prioritized: number;
+    waitingChildren: number;
   };
   processors: {
     locks: number;

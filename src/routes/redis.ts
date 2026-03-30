@@ -1,12 +1,12 @@
 import { Router } from 'express';
-import { Redis } from 'ioredis';
+import type { QueueAdapter } from '../adapters/types.js';
 
-export function redisRoutes(redisUrl: string): Router {
+export function redisRoutes(adapter: QueueAdapter): Router {
   const router = Router();
-  const redis = new Redis(redisUrl, { maxRetriesPerRequest: null });
 
   router.get('/redis', async (_req, res) => {
     try {
+      const redis = adapter.getCmdConnection();
       const info = await redis.info();
       const parsed = parseRedisInfo(info);
 
@@ -15,6 +15,7 @@ export function redisRoutes(redisUrl: string): Router {
         memory: {
           used: parsed['used_memory_human'] || 'unknown',
           peak: parsed['used_memory_peak_human'] || 'unknown',
+          usedBytes: parseInt(parsed['used_memory'] || '0', 10),
         },
         clients: {
           connected: parseInt(parsed['connected_clients'] || '0', 10),
