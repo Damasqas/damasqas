@@ -37,15 +37,15 @@ const eventTypeColors: Record<string, { bg: string; text: string }> = {
   active: { bg: colors.blue, text: colors.blueText },
   added: { bg: colors.purple, text: colors.purpleText },
   waiting: { bg: 'rgba(255,255,255,0.15)', text: colors.textSecondary },
-  delayed: { bg: '#f97316', text: '#fdba74' },
-  progress: { bg: '#06b6d4', text: '#67e8f9' },
-  removed: { bg: '#ec4899', text: '#f9a8d4' },
+  delayed: { bg: colors.amber, text: colors.amberText },
+  progress: { bg: colors.blue, text: colors.blueText },
+  removed: { bg: colors.red, text: colors.redText },
   drained: { bg: 'rgba(255,255,255,0.1)', text: colors.textMuted },
   error: { bg: colors.red, text: colors.redText },
   duplicated: { bg: colors.purple, text: colors.purpleText },
   cleaned: { bg: 'rgba(255,255,255,0.1)', text: colors.textMuted },
   paused: { bg: colors.amber, text: colors.amberText },
-  resumed: { bg: '#84cc16', text: '#bef264' },
+  resumed: { bg: colors.green, text: colors.greenText },
 };
 
 const PAGE_SIZE = 50;

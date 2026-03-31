@@ -42,8 +42,8 @@ export function App() {
           alignItems: 'center',
           gap: 24,
           padding: '14px 24px',
-          borderBottom: '1px solid rgba(255,255,255,0.06)',
-          background: 'rgba(0,0,0,0.55)',
+          borderBottom: 'none',
+          background: 'linear-gradient(180deg, rgba(0,0,0,0.7), rgba(0,0,0,0.5))',
           backdropFilter: 'blur(20px) saturate(1.6)',
           WebkitBackdropFilter: 'blur(20px) saturate(1.6)',
           position: 'sticky',
@@ -51,6 +51,14 @@ export function App() {
           zIndex: 100,
           boxShadow: shadows.nav,
         }}>
+          <div style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: 1,
+            background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+          }} />
           <span style={{
             fontWeight: 700,
             fontSize: 18,
@@ -128,7 +136,7 @@ function NavButton({ active, onClick, children }: {
         background: active
           ? 'linear-gradient(135deg, rgba(220,38,38,0.15), rgba(185,28,28,0.08))'
           : hovered
-            ? 'rgba(255,255,255,0.04)'
+            ? 'linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))'
             : 'none',
         border: active
           ? '1px solid rgba(185,28,28,0.2)'
