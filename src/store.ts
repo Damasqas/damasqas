@@ -1678,8 +1678,8 @@ export class MetricsStore {
       return {
         completed,
         failed,
-        failRate: total > 0 ? Math.round(failed * 1000 / total) / 10 : null,
-        avgProcessMs: avgProcessMs ? Math.round(avgProcessMs) : null,
+        failRate: Math.round(failed * 1000 / total) / 10,
+        avgProcessMs: avgProcessMs != null ? Math.round(avgProcessMs) : null,
       };
     };
 
@@ -1690,16 +1690,17 @@ export class MetricsStore {
     ) ?? { completed: 0, failed: 0, failRate: null, avgProcessMs: null };
 
     // Yesterday & last week: use job_type_summaries (survives event pruning)
-    const querySummaryPeriod = (since: number, until: number) => {
-      const row = this.db.prepare(`
-        SELECT
-          SUM(completed) as completed,
-          SUM(failed) as failed,
-          SUM(COALESCE(avg_process_ms, 0) * completed) / NULLIF(SUM(CASE WHEN avg_process_ms IS NOT NULL THEN completed ELSE 0 END), 0) as avg_process_ms
-        FROM job_type_summaries
-        WHERE queue = ? AND minute_ts BETWEEN ? AND ?
-      `).get(queue, since, until) as { completed: number | null; failed: number | null; avg_process_ms: number | null } | undefined;
+    const summaryStmt = this.db.prepare(`
+      SELECT
+        SUM(completed) as completed,
+        SUM(failed) as failed,
+        SUM(COALESCE(avg_process_ms, 0) * completed) / NULLIF(SUM(CASE WHEN avg_process_ms IS NOT NULL THEN completed ELSE 0 END), 0) as avg_process_ms
+      FROM job_type_summaries
+      WHERE queue = ? AND minute_ts BETWEEN ? AND ?
+    `);
 
+    const querySummaryPeriod = (since: number, until: number) => {
+      const row = summaryStmt.get(queue, since, until) as { completed: number | null; failed: number | null; avg_process_ms: number | null } | undefined;
       if (!row || ((row.completed ?? 0) === 0 && (row.failed ?? 0) === 0)) return null;
       return buildResult(row.completed ?? 0, row.failed ?? 0, row.avg_process_ms);
     };
@@ -1729,9 +1730,11 @@ export class MetricsStore {
       };
     };
 
+    const cols = 'ts, waiting, throughput_1m, fail_rate_1m, avg_process_ms';
+
     // Get latest snapshot for this queue
     const currentRow = this.db.prepare(
-      'SELECT * FROM snapshots WHERE queue = ? ORDER BY ts DESC LIMIT 1',
+      `SELECT ${cols} FROM snapshots WHERE queue = ? ORDER BY ts DESC LIMIT 1`,
     ).get(queue) as Record<string, unknown> | undefined;
 
     if (!currentRow) return { current: null, yesterday: null, lastWeek: null };
@@ -1739,20 +1742,21 @@ export class MetricsStore {
     const currentTs = currentRow.ts as number;
 
     // Find closest snapshot at same time yesterday (within 30s window)
-    const yesterdayRow = this.db.prepare(`
-      SELECT * FROM snapshots
+    const historicalStmt = this.db.prepare(`
+      SELECT ${cols} FROM snapshots
       WHERE queue = ? AND ts BETWEEN ? AND ?
       ORDER BY ABS(ts - ?) ASC
       LIMIT 1
-    `).get(queue, currentTs - 86400000 - 30000, currentTs - 86400000 + 30000, currentTs - 86400000) as Record<string, unknown> | undefined;
+    `);
+
+    const yesterdayRow = historicalStmt.get(
+      queue, currentTs - 86400000 - 30000, currentTs - 86400000 + 30000, currentTs - 86400000,
+    ) as Record<string, unknown> | undefined;
 
     // Find closest snapshot at same time last week (within 30s window)
-    const lastWeekRow = this.db.prepare(`
-      SELECT * FROM snapshots
-      WHERE queue = ? AND ts BETWEEN ? AND ?
-      ORDER BY ABS(ts - ?) ASC
-      LIMIT 1
-    `).get(queue, currentTs - 7 * 86400000 - 30000, currentTs - 7 * 86400000 + 30000, currentTs - 7 * 86400000) as Record<string, unknown> | undefined;
+    const lastWeekRow = historicalStmt.get(
+      queue, currentTs - 7 * 86400000 - 30000, currentTs - 7 * 86400000 + 30000, currentTs - 7 * 86400000,
+    ) as Record<string, unknown> | undefined;
 
     return {
       current: mapRow(currentRow),
@@ -1774,23 +1778,29 @@ export class MetricsStore {
       yesterday: { waiting: number; throughput: number | null; failRate: number | null } | null;
     }>();
 
-    // Get latest snapshot per queue
+    // Get latest snapshot per queue (select only needed columns)
     const latestRows = this.db.prepare(`
-      SELECT s.* FROM snapshots s
+      SELECT s.queue, s.ts, s.waiting, s.throughput_1m, s.fail_rate_1m
+      FROM snapshots s
       INNER JOIN (SELECT queue, MAX(ts) as max_ts FROM snapshots GROUP BY queue) latest
         ON s.queue = latest.queue AND s.ts = latest.max_ts
     `).all() as Record<string, unknown>[];
+
+    // Prepare once outside the loop to avoid recompiling SQL per queue
+    const yesterdayStmt = this.db.prepare(`
+      SELECT waiting, throughput_1m, fail_rate_1m FROM snapshots
+      WHERE queue = ? AND ts BETWEEN ? AND ?
+      ORDER BY ABS(ts - ?) ASC
+      LIMIT 1
+    `);
 
     for (const row of latestRows) {
       const queue = row.queue as string;
       const currentTs = row.ts as number;
 
-      const yesterdayRow = this.db.prepare(`
-        SELECT waiting, throughput_1m, fail_rate_1m FROM snapshots
-        WHERE queue = ? AND ts BETWEEN ? AND ?
-        ORDER BY ABS(ts - ?) ASC
-        LIMIT 1
-      `).get(queue, currentTs - 86400000 - 30000, currentTs - 86400000 + 30000, currentTs - 86400000) as Record<string, unknown> | undefined;
+      const yesterdayRow = yesterdayStmt.get(
+        queue, currentTs - 86400000 - 30000, currentTs - 86400000 + 30000, currentTs - 86400000,
+      ) as Record<string, unknown> | undefined;
 
       result.set(queue, {
         current: {

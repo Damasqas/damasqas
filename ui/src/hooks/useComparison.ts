@@ -76,14 +76,38 @@ export function computeTrend(
   previous: number | null,
   higherIsBad: boolean,
 ): TrendInfo | null {
-  if (current == null || previous == null || previous === 0) return null;
+  if (current == null || previous == null) return null;
+
+  // Both zero — no meaningful comparison
+  if (current === 0 && previous === 0) return null;
+
+  // Previous was zero but current is non-zero — new activity, show as "new"
+  if (previous === 0) {
+    return {
+      direction: 'up',
+      sentiment: higherIsBad ? 'bad' : 'good',
+      multiplier: null,
+      label: 'new vs',
+    };
+  }
+
+  // Current dropped to zero
+  if (current === 0) {
+    return {
+      direction: 'down',
+      sentiment: higherIsBad ? 'good' : 'bad',
+      multiplier: 0,
+      label: 'none vs',
+    };
+  }
 
   const ratio = current / previous;
 
   // Determine if change is significant
+  // Spec: "significantly worse" = >2x for rates, >50% for absolute values
   const isSignificant = higherIsBad
-    ? ratio > 2 || ratio < 0.5  // >2x for rates
-    : Math.abs(ratio - 1) > 0.5;  // >50% for absolute values
+    ? ratio >= 2 || ratio <= 0.5  // >=2x for rates
+    : Math.abs(ratio - 1) >= 0.5;  // >=50% for absolute values
 
   if (!isSignificant) {
     return {
@@ -99,10 +123,14 @@ export function computeTrend(
     ? (direction === 'up' ? 'bad' : 'good')
     : (direction === 'up' ? 'good' : 'bad');
 
+  // Show human-readable multiplier: "3.2x" when going up, "3.2x" when going down
+  // (e.g. throughput dropped from 100 to 10 → show "10.0x" decrease, not "0.1x")
+  const displayRatio = ratio >= 1 ? ratio : 1 / ratio;
+
   return {
     direction,
     sentiment,
     multiplier: ratio,
-    label: `${ratio.toFixed(1)}x vs`,
+    label: `${displayRatio.toFixed(1)}x vs`,
   };
 }
