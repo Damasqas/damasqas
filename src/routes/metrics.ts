@@ -46,5 +46,30 @@ export function metricsRoutes(store: MetricsStore): Router {
     }
   });
 
+  router.get('/queues/:name/comparison', (req, res) => {
+    try {
+      const name = req.params.name!;
+      const events = store.getEventComparison(name);
+      const snapshots = store.getSnapshotComparison(name);
+
+      res.json({ queue: name, events, snapshots });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch comparison data' });
+    }
+  });
+
+  router.get('/comparison', (_req, res) => {
+    try {
+      const comparisons = store.getAllQueuesComparison();
+      const result: Record<string, unknown> = {};
+      for (const [queue, data] of comparisons) {
+        result[queue] = data;
+      }
+      res.json({ comparisons: result });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch comparison data' });
+    }
+  });
+
   return router;
 }

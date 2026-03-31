@@ -1637,6 +1637,226 @@ export class MetricsStore {
     };
   }
 
+  // ── Comparative Analytics Methods ─────────────────────────────────
+
+  /**
+   * Compare event-based metrics (completed, failed, fail rate, avg process time)
+   * for the current hour vs the same hour yesterday and same hour last week.
+   *
+   * Current hour uses the events table (full resolution within 1h retention).
+   * Yesterday and last week use pre-aggregated job_type_summaries since
+   * completed events are pruned after 1 hour by tiered retention.
+   */
+  getEventComparison(queue: string): {
+    current: { completed: number; failed: number; failRate: number | null; avgProcessMs: number | null };
+    yesterday: { completed: number; failed: number; failRate: number | null; avgProcessMs: number | null } | null;
+    lastWeek: { completed: number; failed: number; failRate: number | null; avgProcessMs: number | null } | null;
+  } {
+    const now = Date.now();
+    const hourStart = now - (now % 3600000);
+    const hourEnd = now;
+
+    // Current hour: use events table (within 1h retention window)
+    const currentRow = this.db.prepare(`
+      SELECT
+        COUNT(*) FILTER (WHERE event_type = 'completed') as completed,
+        COUNT(*) FILTER (WHERE event_type = 'failed') as failed
+      FROM events
+      WHERE queue = ? AND ts BETWEEN ? AND ? AND event_type IN ('completed', 'failed')
+    `).get(queue, hourStart, hourEnd) as { completed: number; failed: number } | undefined;
+
+    // Current hour timing from job_timings (also within retention)
+    const currentTimingRow = this.db.prepare(`
+      SELECT AVG(process_ms) as avg_process_ms
+      FROM job_timings
+      WHERE queue = ? AND ts BETWEEN ? AND ? AND wait_ms >= 0
+    `).get(queue, hourStart, hourEnd) as { avg_process_ms: number | null } | undefined;
+
+    const buildResult = (completed: number, failed: number, avgProcessMs: number | null) => {
+      const total = completed + failed;
+      if (total === 0) return null;
+      return {
+        completed,
+        failed,
+        failRate: Math.round(failed * 1000 / total) / 10,
+        avgProcessMs: avgProcessMs != null ? Math.round(avgProcessMs) : null,
+      };
+    };
+
+    const current = buildResult(
+      currentRow?.completed ?? 0,
+      currentRow?.failed ?? 0,
+      currentTimingRow?.avg_process_ms ?? null,
+    ) ?? { completed: 0, failed: 0, failRate: null, avgProcessMs: null };
+
+    // Yesterday & last week: use job_type_summaries (survives event pruning)
+    const summaryStmt = this.db.prepare(`
+      SELECT
+        SUM(completed) as completed,
+        SUM(failed) as failed,
+        SUM(COALESCE(avg_process_ms, 0) * completed) / NULLIF(SUM(CASE WHEN avg_process_ms IS NOT NULL THEN completed ELSE 0 END), 0) as avg_process_ms
+      FROM job_type_summaries
+      WHERE queue = ? AND minute_ts BETWEEN ? AND ?
+    `);
+
+    const querySummaryPeriod = (since: number, until: number) => {
+      const row = summaryStmt.get(queue, since, until) as { completed: number | null; failed: number | null; avg_process_ms: number | null } | undefined;
+      if (!row || ((row.completed ?? 0) === 0 && (row.failed ?? 0) === 0)) return null;
+      return buildResult(row.completed ?? 0, row.failed ?? 0, row.avg_process_ms);
+    };
+
+    const yesterday = querySummaryPeriod(hourStart - 86400000, hourEnd - 86400000);
+    const lastWeek = querySummaryPeriod(hourStart - 7 * 86400000, hourEnd - 7 * 86400000);
+
+    return { current, yesterday, lastWeek };
+  }
+
+  /**
+   * Compare snapshot-based metrics (queue depth, throughput, fail rate)
+   * for the current period vs the same period yesterday and last week.
+   *
+   * Uses a 5-minute averaging window instead of single snapshots because
+   * BullMQ's throughput_1m and fail_rate_1m are instantaneous rates computed
+   * from deltas between ~1s snapshot intervals. A single data point is very
+   * noisy (e.g., 0 completions in one 1s window → throughput=0, then 2
+   * completions in the next → throughput=120/min). Averaging over 5 minutes
+   * gives ~30 downsampled data points (10s resolution after cleanup) and
+   * produces a stable comparison.
+   */
+  getSnapshotComparison(queue: string): {
+    current: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
+    yesterday: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
+    lastWeek: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
+  } {
+    const WINDOW_MS = 5 * 60 * 1000; // 5-minute averaging window
+
+    // Current: average over the last 5 minutes
+    const now = Date.now();
+    const currentRow = this.db.prepare(`
+      SELECT
+        AVG(waiting) as waiting,
+        AVG(throughput_1m) as throughput_1m,
+        AVG(fail_rate_1m) as fail_rate_1m,
+        AVG(avg_process_ms) as avg_process_ms
+      FROM snapshots
+      WHERE queue = ? AND ts BETWEEN ? AND ?
+    `).get(queue, now - WINDOW_MS, now) as Record<string, unknown> | undefined;
+
+    if (!currentRow || currentRow.waiting == null) {
+      return { current: null, yesterday: null, lastWeek: null };
+    }
+
+    // Historical: average over a 5-minute window centered on same time yesterday/last week
+    const historicalStmt = this.db.prepare(`
+      SELECT
+        AVG(waiting) as waiting,
+        AVG(throughput_1m) as throughput_1m,
+        AVG(fail_rate_1m) as fail_rate_1m,
+        AVG(avg_process_ms) as avg_process_ms
+      FROM snapshots
+      WHERE queue = ? AND ts BETWEEN ? AND ?
+    `);
+
+    const mapRow = (row: Record<string, unknown> | undefined) => {
+      if (!row || row.waiting == null) return null;
+      return {
+        waiting: Math.round(row.waiting as number),
+        throughput: row.throughput_1m as number | null,
+        failRate: row.fail_rate_1m as number | null,
+        avgProcessMs: row.avg_process_ms as number | null,
+      };
+    };
+
+    const halfWindow = WINDOW_MS / 2;
+    const yesterdayCenter = now - 86400000;
+    const lastWeekCenter = now - 7 * 86400000;
+
+    const yesterdayRow = historicalStmt.get(
+      queue, yesterdayCenter - halfWindow, yesterdayCenter + halfWindow,
+    ) as Record<string, unknown> | undefined;
+
+    const lastWeekRow = historicalStmt.get(
+      queue, lastWeekCenter - halfWindow, lastWeekCenter + halfWindow,
+    ) as Record<string, unknown> | undefined;
+
+    return {
+      current: mapRow(currentRow),
+      yesterday: mapRow(yesterdayRow),
+      lastWeek: mapRow(lastWeekRow),
+    };
+  }
+
+  /**
+   * Get comparison data for all queues at once (for Overview page).
+   * Returns snapshot-based comparison per queue, averaged over 5-minute
+   * windows to smooth out noisy instantaneous rates.
+   */
+  getAllQueuesComparison(): Map<string, {
+    current: { waiting: number; throughput: number | null; failRate: number | null };
+    yesterday: { waiting: number; throughput: number | null; failRate: number | null } | null;
+  }> {
+    const result = new Map<string, {
+      current: { waiting: number; throughput: number | null; failRate: number | null };
+      yesterday: { waiting: number; throughput: number | null; failRate: number | null } | null;
+    }>();
+
+    const WINDOW_MS = 5 * 60 * 1000;
+    const now = Date.now();
+
+    // Current: average over the last 5 minutes, grouped by queue
+    const currentRows = this.db.prepare(`
+      SELECT
+        queue,
+        AVG(waiting) as waiting,
+        AVG(throughput_1m) as throughput_1m,
+        AVG(fail_rate_1m) as fail_rate_1m
+      FROM snapshots
+      WHERE ts BETWEEN ? AND ?
+      GROUP BY queue
+    `).all(now - WINDOW_MS, now) as Record<string, unknown>[];
+
+    if (currentRows.length === 0) return result;
+
+    // Yesterday: average over a 5-minute window centered on same time yesterday
+    const halfWindow = WINDOW_MS / 2;
+    const yesterdayCenter = now - 86400000;
+    const yesterdayRows = this.db.prepare(`
+      SELECT
+        queue,
+        AVG(waiting) as waiting,
+        AVG(throughput_1m) as throughput_1m,
+        AVG(fail_rate_1m) as fail_rate_1m
+      FROM snapshots
+      WHERE ts BETWEEN ? AND ?
+      GROUP BY queue
+    `).all(yesterdayCenter - halfWindow, yesterdayCenter + halfWindow) as Record<string, unknown>[];
+
+    const yesterdayMap = new Map<string, Record<string, unknown>>();
+    for (const row of yesterdayRows) {
+      yesterdayMap.set(row.queue as string, row);
+    }
+
+    for (const row of currentRows) {
+      const queue = row.queue as string;
+      const yesterdayRow = yesterdayMap.get(queue);
+
+      result.set(queue, {
+        current: {
+          waiting: Math.round(row.waiting as number),
+          throughput: row.throughput_1m as number | null,
+          failRate: row.fail_rate_1m as number | null,
+        },
+        yesterday: yesterdayRow ? {
+          waiting: Math.round(yesterdayRow.waiting as number),
+          throughput: yesterdayRow.throughput_1m as number | null,
+          failRate: yesterdayRow.fail_rate_1m as number | null,
+        } : null,
+      });
+    }
+
+    return result;
+  }
+
   private rowToAlertRule(row: Record<string, unknown>): AlertRule {
     return {
       id: row.id as number,

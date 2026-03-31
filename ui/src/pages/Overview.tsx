@@ -3,6 +3,7 @@ import { useAnomalies } from '../hooks/useAnomalies';
 import { StatCard } from '../components/StatCard';
 import { AlertBanner } from '../components/AlertBanner';
 import { QueueTable } from '../components/QueueTable';
+import { useOverviewComparison, computeTrend } from '../hooks/useComparison';
 
 interface OverviewProps {
   onSelectQueue: (name: string) => void;
@@ -11,6 +12,7 @@ interface OverviewProps {
 export function Overview({ onSelectQueue }: OverviewProps) {
   const { data, isLoading } = useQueues();
   const { data: anomalyData } = useAnomalies();
+  const { data: comparisonData } = useOverviewComparison();
 
   if (isLoading) {
     return <div style={{ color: '#666', padding: 40 }}>Loading queues...</div>;
@@ -32,6 +34,42 @@ export function Overview({ onSelectQueue }: OverviewProps) {
   const totalStalled = queues.reduce((sum, q) => sum + q.processors.stalled, 0);
   const totalOverdue = queues.reduce((sum, q) => sum + (q.overdueDelayed || 0), 0);
 
+  // Aggregate comparison data across queues that have data in both periods.
+  // Only include queues with yesterday data in both current and yesterday totals
+  // to avoid skewing the comparison (e.g. new queues inflating current totals).
+  const comparisons = comparisonData?.comparisons;
+  let matchedCurrentThroughput = 0;
+  let matchedCurrentFailRate = 0;
+  let matchedCurrentWaiting = 0;
+  let yesterdayTotalThroughput = 0;
+  let yesterdayTotalFailRate = 0;
+  let yesterdayTotalWaiting = 0;
+  let hasYesterdayData = false;
+  if (comparisons) {
+    for (const queue of queues) {
+      const comp = comparisons[queue.name];
+      if (comp?.yesterday) {
+        hasYesterdayData = true;
+        matchedCurrentThroughput += comp.current.throughput ?? 0;
+        matchedCurrentFailRate += comp.current.failRate ?? 0;
+        matchedCurrentWaiting += comp.current.waiting;
+        yesterdayTotalThroughput += comp.yesterday.throughput ?? 0;
+        yesterdayTotalFailRate += comp.yesterday.failRate ?? 0;
+        yesterdayTotalWaiting += comp.yesterday.waiting;
+      }
+    }
+  }
+
+  const throughputTrend = hasYesterdayData
+    ? [{ period: 'yesterday', trend: computeTrend(matchedCurrentThroughput, yesterdayTotalThroughput, false) }]
+    : [];
+  const failureTrend = hasYesterdayData
+    ? [{ period: 'yesterday', trend: computeTrend(matchedCurrentFailRate, yesterdayTotalFailRate, true) }]
+    : [];
+  const waitingTrend = hasYesterdayData
+    ? [{ period: 'yesterday', trend: computeTrend(matchedCurrentWaiting, yesterdayTotalWaiting, true) }]
+    : [];
+
   return (
     <div>
       <AlertBanner anomalies={activeAnomalies} />
@@ -42,13 +80,14 @@ export function Overview({ onSelectQueue }: OverviewProps) {
         gap: 12,
         marginBottom: 24,
       }}>
-        <StatCard label="Throughput" value={`${totalThroughput.toFixed(1)}/m`} />
+        <StatCard label="Throughput" value={`${totalThroughput.toFixed(1)}/m`} trends={throughputTrend} />
         <StatCard
           label="Failures"
           value={`${totalFailures.toFixed(1)}/m`}
           critical={totalFailures > 0}
+          trends={failureTrend}
         />
-        <StatCard label="Waiting" value={totalWaiting.toLocaleString()} />
+        <StatCard label="Waiting" value={totalWaiting.toLocaleString()} trends={waitingTrend} />
         <StatCard label="Processors" value={totalLocks} />
         <StatCard
           label="Stalled"

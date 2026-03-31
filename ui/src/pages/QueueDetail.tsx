@@ -8,6 +8,8 @@ import { StatCard } from '../components/StatCard';
 import { Chart } from '../components/Chart';
 import { CapacityPanel } from '../components/CapacityPanel';
 import { JobTypeTable } from '../components/JobTypeTable';
+import { useQueueComparison, computeTrend } from '../hooks/useComparison';
+import type { TrendInfo } from '../hooks/useComparison';
 
 interface QueueDetailProps {
   queue: string;
@@ -28,6 +30,7 @@ export function QueueDetail({ queue }: QueueDetailProps) {
   const [range, setRange] = useState<Range>('1h');
   const { data: metricsData } = useMetrics(queue, range);
   const { data: jobTypesData } = useJobTypes(queue, range);
+  const { data: comparisonData } = useQueueComparison(queue);
   const { showToast } = useToast();
 
   const pauseMutation = usePauseQueue(queue);
@@ -126,10 +129,19 @@ export function QueueDetail({ queue }: QueueDetailProps) {
         gap: 12,
         marginBottom: 24,
       }}>
-        <StatCard label="Waiting" value={q.counts.waiting.toLocaleString()} />
+        <StatCard
+          label="Waiting"
+          value={q.counts.waiting.toLocaleString()}
+          trends={buildSnapshotTrends(comparisonData, 'waiting', true)}
+        />
         <StatCard label="Active" value={q.counts.active} />
         <StatCard label="Completed" value={q.counts.completed.toLocaleString()} />
-        <StatCard label="Failed" value={q.counts.failed.toLocaleString()} critical={q.counts.failed > 0} />
+        <StatCard
+          label="Failed"
+          value={q.counts.failed.toLocaleString()}
+          critical={q.counts.failed > 0}
+          trends={buildEventTrends(comparisonData, 'failRate', true)}
+        />
         <StatCard label="Delayed" value={q.counts.delayed} />
         <StatCard label="Locks" value={q.processors.locks} />
         <StatCard label="Stalled" value={q.processors.stalled} critical={q.processors.stalled > 0} />
@@ -173,6 +185,32 @@ export function QueueDetail({ queue }: QueueDetailProps) {
       <JobTypeTable breakdown={jobTypesData?.breakdown || []} />
     </div>
   );
+}
+
+function buildSnapshotTrends(
+  data: ReturnType<typeof useQueueComparison>['data'],
+  field: 'waiting' | 'throughput' | 'failRate',
+  higherIsBad: boolean,
+): { period: string; trend: TrendInfo | null }[] {
+  if (!data?.snapshots?.current) return [];
+  const current = data.snapshots.current[field];
+  return [
+    { period: 'yesterday', trend: computeTrend(current, data.snapshots.yesterday?.[field] ?? null, higherIsBad) },
+    { period: 'last week', trend: computeTrend(current, data.snapshots.lastWeek?.[field] ?? null, higherIsBad) },
+  ];
+}
+
+function buildEventTrends(
+  data: ReturnType<typeof useQueueComparison>['data'],
+  field: 'completed' | 'failed' | 'failRate' | 'avgProcessMs',
+  higherIsBad: boolean,
+): { period: string; trend: TrendInfo | null }[] {
+  if (!data?.events?.current) return [];
+  const current = data.events.current[field];
+  return [
+    { period: 'yesterday', trend: computeTrend(current, data.events.yesterday?.[field] ?? null, higherIsBad) },
+    { period: 'last week', trend: computeTrend(current, data.events.lastWeek?.[field] ?? null, higherIsBad) },
+  ];
 }
 
 function ControlButton({ label, onClick }: { label: string; onClick: () => void }) {
