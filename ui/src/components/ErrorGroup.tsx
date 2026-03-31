@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ErrorGroup as ErrorGroupType } from '../hooks/useJobs';
+import { glassCard, glassBtn, glassBtnRed, colors, rowHoverBg } from '../theme';
 
 interface ErrorGroupProps {
   group: ErrorGroupType;
@@ -13,11 +14,10 @@ export function ErrorGroup({ group, queue, onRetry, onRemove }: ErrorGroupProps)
 
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       marginBottom: 8,
       overflow: 'hidden',
+      padding: 0,
     }}>
       <div
         onClick={() => setExpanded(!expanded)}
@@ -27,10 +27,12 @@ export function ErrorGroup({ group, queue, onRetry, onRemove }: ErrorGroupProps)
           display: 'flex',
           alignItems: 'center',
           gap: 12,
+          transition: 'all 0.15s',
+          background: expanded ? rowHoverBg : 'transparent',
         }}
       >
         <span style={{
-          color: '#666',
+          color: colors.textMuted,
           fontSize: 12,
           transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
           transition: 'transform 0.15s',
@@ -38,20 +40,22 @@ export function ErrorGroup({ group, queue, onRetry, onRemove }: ErrorGroupProps)
           ▶
         </span>
         <span style={{
-          background: 'rgba(255, 51, 51, 0.15)',
-          color: '#ff3333',
+          background: 'linear-gradient(135deg, rgba(185,28,28,0.18), rgba(185,28,28,0.06))',
+          color: colors.redText,
           fontSize: 11,
           fontWeight: 600,
           padding: '2px 8px',
-          borderRadius: 10,
-          fontFamily: 'IBM Plex Mono, monospace',
+          borderRadius: 6,
+          border: `1px solid ${colors.redBorder}`,
+          fontFamily: "'IBM Plex Mono', monospace",
+          boxShadow: '0 0 8px rgba(185,28,28,0.2), inset 0 1px 0 rgba(255,255,255,0.08)',
         }}>
           {group.count}
         </span>
         <span style={{
-          color: '#ccc',
+          color: colors.textSecondary,
           fontSize: 13,
-          fontFamily: 'IBM Plex Mono, monospace',
+          fontFamily: "'IBM Plex Mono', monospace",
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -62,10 +66,12 @@ export function ErrorGroup({ group, queue, onRetry, onRemove }: ErrorGroupProps)
       </div>
 
       {expanded && (
-        <div style={{
-          borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-          padding: '8px 16px',
-        }}>
+        <div style={{ padding: '8px 16px' }}>
+          <div style={{
+            height: 1,
+            background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+            marginBottom: 8,
+          }} />
           {group.jobIds.slice(0, 20).map((id) => (
             <div
               key={id}
@@ -74,13 +80,12 @@ export function ErrorGroup({ group, queue, onRetry, onRemove }: ErrorGroupProps)
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 padding: '6px 0',
-                borderBottom: '1px solid rgba(255, 255, 255, 0.03)',
               }}
             >
               <span style={{
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 12,
-                color: '#999',
+                color: colors.textSecondary,
               }}>
                 Job #{id}
               </span>
@@ -91,7 +96,7 @@ export function ErrorGroup({ group, queue, onRetry, onRemove }: ErrorGroupProps)
             </div>
           ))}
           {group.jobIds.length > 20 && (
-            <div style={{ padding: '8px 0', color: '#666', fontSize: 12 }}>
+            <div style={{ padding: '8px 0', color: colors.textMuted, fontSize: 12 }}>
               ... and {group.jobIds.length - 20} more
             </div>
           )}
@@ -108,18 +113,15 @@ function ActionButton({ label, onClick, danger }: {
 }) {
   return (
     <button
+      type="button"
       onClick={(e) => {
         e.stopPropagation();
         onClick();
       }}
       style={{
-        background: 'rgba(255, 255, 255, 0.05)',
-        border: `1px solid ${danger ? 'rgba(255, 51, 51, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
-        borderRadius: 6,
-        color: danger ? '#ff3333' : '#ccc',
+        ...(danger ? glassBtnRed : glassBtn),
         fontSize: 11,
         padding: '3px 10px',
-        cursor: 'pointer',
         fontFamily: 'inherit',
       }}
     >

@@ -10,6 +10,7 @@ import {
 } from 'recharts';
 import type { QueueState } from '../hooks/useQueues';
 import type { Metric } from '../hooks/useMetrics';
+import { glassCard, glassCardInner, sectionLabel, chartTooltip, colors } from '../theme';
 
 interface CapacityPanelProps {
   queue: QueueState;
@@ -19,10 +20,10 @@ interface CapacityPanelProps {
 }
 
 const trendArrows: Record<string, { symbol: string; color: string; label: string }> = {
-  draining: { symbol: '\u2193', color: '#22c55e', label: 'Draining' },
-  growing: { symbol: '\u2191', color: '#ff3333', label: 'Growing' },
-  stable: { symbol: '\u2014', color: '#888', label: 'Stable' },
-  stalled: { symbol: '\u23F8', color: '#ff3333', label: 'Stalled' },
+  draining: { symbol: '\u2193', color: colors.greenText, label: 'Draining' },
+  growing: { symbol: '\u2191', color: colors.redText, label: 'Growing' },
+  stable: { symbol: '\u2014', color: colors.textSecondary, label: 'Stable' },
+  stalled: { symbol: '\u23F8', color: colors.redText, label: 'Stalled' },
 };
 
 function formatDuration(minutes: number): string {
@@ -59,22 +60,18 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
   if (!drain) {
     return (
       <div style={{
-        background: 'rgba(255, 255, 255, 0.02)',
-        border: '1px solid rgba(255, 255, 255, 0.06)',
-        borderRadius: 12,
+        ...glassCard,
         padding: 20,
         marginBottom: 24,
       }}>
         <div style={{
-          fontSize: 12,
-          color: '#666',
-          textTransform: 'uppercase',
-          letterSpacing: 1,
+          ...sectionLabel,
+          fontSize: 9,
           marginBottom: 16,
         }}>
           Capacity Planning
         </div>
-        <div style={{ color: '#555', fontSize: 13 }}>
+        <div style={{ color: colors.textMuted, fontSize: 13 }}>
           Collecting data... (requires at least 2 snapshots)
         </div>
       </div>
@@ -83,9 +80,6 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
 
   const trend = trendArrows[drain.trend] || trendArrows.stable!;
 
-  // Derive inflow/drain time-series from existing metrics:
-  // drainRate = throughput + failureRate (both completed and failed drain the wait queue)
-  // inflowRate = drainRate + backlogGrowthRate (backlog change = inflow - drain)
   const chartData = metrics.map((m) => ({
     time: m.timestamp,
     drainRate: m.throughput + m.failureRate,
@@ -94,17 +88,13 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
 
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       padding: 20,
       marginBottom: 24,
     }}>
       <div style={{
-        fontSize: 12,
-        color: '#666',
-        textTransform: 'uppercase',
-        letterSpacing: 1,
+        ...sectionLabel,
+        fontSize: 9,
         marginBottom: 16,
       }}>
         Capacity Planning
@@ -118,15 +108,14 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
       }}>
         {/* Current Depth + Trend */}
         <div style={{
-          background: 'rgba(255, 255, 255, 0.03)',
-          borderRadius: 8,
+          ...glassCardInner,
           padding: 16,
         }}>
-          <div style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+          <div style={{ ...sectionLabel, marginBottom: 8 }}>
             Queue Depth
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-            <span style={{ fontSize: 24, fontWeight: 600, color: '#fff', fontFamily: 'IBM Plex Mono, monospace' }}>
+            <span style={{ fontSize: 24, fontWeight: 600, color: '#fff', fontFamily: "'IBM Plex Mono', monospace" }}>
               {drain.currentDepth.toLocaleString()}
             </span>
             <span style={{ fontSize: 18, color: trend.color, fontWeight: 600 }} title={trend.label}>
@@ -137,7 +126,7 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
             </span>
           </div>
           {drain.depthDelta !== 0 && (
-            <div style={{ fontSize: 11, color: '#555', marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>
               {drain.depthDelta > 0 ? '+' : ''}{drain.depthDelta} since last window
             </div>
           )}
@@ -145,39 +134,42 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
 
         {/* Inflow vs Drain Rate */}
         <div style={{
-          background: 'rgba(255, 255, 255, 0.03)',
-          borderRadius: 8,
+          ...glassCardInner,
           padding: 16,
         }}>
-          <div style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+          <div style={{ ...sectionLabel, marginBottom: 8 }}>
             Rates (jobs/min)
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 12, color: '#f59e0b' }}>Inflow</span>
-              <span style={{ fontSize: 16, fontWeight: 600, color: '#f59e0b', fontFamily: 'IBM Plex Mono, monospace' }}>
+              <span style={{ fontSize: 12, color: colors.amberText }}>Inflow</span>
+              <span style={{ fontSize: 16, fontWeight: 600, color: colors.amberText, fontFamily: "'IBM Plex Mono', monospace" }}>
                 {drain.inflowRate.toFixed(1)}
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 12, color: '#22c55e' }}>Drain</span>
-              <span style={{ fontSize: 16, fontWeight: 600, color: '#22c55e', fontFamily: 'IBM Plex Mono, monospace' }}>
+              <span style={{ fontSize: 12, color: colors.greenText }}>Drain</span>
+              <span style={{ fontSize: 16, fontWeight: 600, color: colors.greenText, fontFamily: "'IBM Plex Mono', monospace" }}>
                 {drain.drainRate.toFixed(1)}
               </span>
             </div>
             <div style={{
-              borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-              paddingTop: 6,
+              height: 1,
+              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+              margin: '2px 0',
+            }} />
+            <div style={{
+              paddingTop: 2,
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
             }}>
-              <span style={{ fontSize: 12, color: '#888' }}>Net</span>
+              <span style={{ fontSize: 12, color: colors.textSecondary }}>Net</span>
               <span style={{
                 fontSize: 16,
                 fontWeight: 600,
-                fontFamily: 'IBM Plex Mono, monospace',
-                color: drain.netRate > 0 ? '#22c55e' : drain.netRate < 0 ? '#ff3333' : '#888',
+                fontFamily: "'IBM Plex Mono', monospace",
+                color: drain.netRate > 0 ? colors.greenText : drain.netRate < 0 ? colors.redText : colors.textSecondary,
               }}>
                 {drain.netRate > 0 ? '+' : ''}{drain.netRate.toFixed(1)}
               </span>
@@ -187,11 +179,10 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
 
         {/* Projected Drain Time */}
         <div style={{
-          background: 'rgba(255, 255, 255, 0.03)',
-          borderRadius: 8,
+          ...glassCardInner,
           padding: 16,
         }}>
-          <div style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+          <div style={{ ...sectionLabel, marginBottom: 8 }}>
             Time to Drain
           </div>
           {drain.projectedDrainMinutes !== null ? (
@@ -199,28 +190,28 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
               <span style={{
                 fontSize: 24,
                 fontWeight: 600,
-                color: '#22c55e',
-                fontFamily: 'IBM Plex Mono, monospace',
+                color: colors.greenText,
+                fontFamily: "'IBM Plex Mono', monospace",
               }}>
                 {formatDuration(drain.projectedDrainMinutes)}
               </span>
-              <div style={{ fontSize: 11, color: '#555', marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: colors.textMuted, marginTop: 4 }}>
                 at current net drain rate
               </div>
             </div>
           ) : drain.currentDepth === 0 ? (
             <div>
-              <span style={{ fontSize: 18, fontWeight: 600, color: '#22c55e' }}>
+              <span style={{ fontSize: 18, fontWeight: 600, color: colors.greenText }}>
                 Empty
               </span>
             </div>
           ) : (
             <div>
-              <span style={{ fontSize: 18, fontWeight: 600, color: '#ff3333' }}>
+              <span style={{ fontSize: 18, fontWeight: 600, color: colors.redText }}>
                 NEVER
               </span>
               {drain.capacityDeficit > 0 && (
-                <div style={{ fontSize: 12, color: '#ff3333', marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: colors.redText, marginTop: 4 }}>
                   Need {drain.capacityDeficit}% more capacity
                 </div>
               )}
@@ -232,46 +223,40 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
       {/* Inflow vs Drain Rate Chart */}
       {chartData.length > 1 && (
         <div style={{
-          background: 'rgba(255, 255, 255, 0.03)',
-          borderRadius: 8,
+          ...glassCardInner,
           padding: 16,
         }}>
-          <div style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>
+          <div style={{ ...sectionLabel, marginBottom: 12 }}>
             Inflow vs Drain Rate
           </div>
           <ResponsiveContainer width="100%" height={180}>
             <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
               <XAxis
                 dataKey="time"
                 type="number"
                 scale="time"
                 domain={domain ?? ['dataMin', 'dataMax']}
-                tick={{ fill: '#555', fontSize: 10 }}
+                tick={{ fill: 'rgba(255,255,255,0.2)', fontSize: 10 }}
                 axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
                 tickFormatter={(ts: number) => formatTick(ts, range)}
               />
               <YAxis
-                tick={{ fill: '#555', fontSize: 10 }}
+                tick={{ fill: 'rgba(255,255,255,0.2)', fontSize: 10 }}
                 axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
               />
               <Tooltip
-                contentStyle={{
-                  background: '#1a1a1a',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 8,
-                  fontSize: 12,
-                }}
+                contentStyle={chartTooltip}
                 labelFormatter={formatTooltipLabel}
               />
               <Legend
-                wrapperStyle={{ fontSize: 11, color: '#888' }}
+                wrapperStyle={{ fontSize: 11, color: colors.textSecondary }}
               />
               <Line
                 type="monotone"
                 dataKey="inflowRate"
                 name="Inflow"
-                stroke="#f59e0b"
+                stroke={colors.amber}
                 strokeWidth={2}
                 dot={false}
               />
@@ -279,7 +264,7 @@ export function CapacityPanel({ queue, metrics, range, domain }: CapacityPanelPr
                 type="monotone"
                 dataKey="drainRate"
                 name="Drain"
-                stroke="#22c55e"
+                stroke={colors.green}
                 strokeWidth={2}
                 dot={false}
               />

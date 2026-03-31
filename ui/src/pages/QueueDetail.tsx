@@ -10,6 +10,7 @@ import { CapacityPanel } from '../components/CapacityPanel';
 import { JobTypeTable } from '../components/JobTypeTable';
 import { useQueueComparison, computeTrend } from '../hooks/useComparison';
 import type { TrendInfo } from '../hooks/useComparison';
+import { colors, glassBtn, glassBtnHover, filterBtn, filterBtnActive } from '../theme';
 
 interface QueueDetailProps {
   queue: string;
@@ -39,7 +40,7 @@ export function QueueDetail({ queue }: QueueDetailProps) {
   const promoteAllMutation = usePromoteAllOverdue(queue);
 
   if (!queueData) {
-    return <div style={{ color: '#666', padding: 40 }}>Loading queue...</div>;
+    return <div style={{ color: colors.textMuted, padding: 40 }}>Loading queue...</div>;
   }
 
   const q = queueData;
@@ -95,16 +96,18 @@ export function QueueDetail({ queue }: QueueDetailProps) {
         justifyContent: 'space-between',
         marginBottom: 20,
       }}>
-        <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 600 }}>
+        <h2 style={{ color: '#fff', fontSize: 20, fontWeight: 600, letterSpacing: -0.5 }}>
           {queue}
           {q.paused && (
             <span style={{
               fontSize: 11,
-              color: '#f59e0b',
-              background: 'rgba(245, 158, 11, 0.1)',
+              color: colors.amberText,
+              background: 'linear-gradient(135deg, rgba(217,119,6,0.15), rgba(217,119,6,0.06))',
               padding: '2px 8px',
               borderRadius: 6,
               marginLeft: 12,
+              border: `1px solid ${colors.amberBorder}`,
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
             }}>
               PAUSED
             </span>
@@ -153,18 +156,10 @@ export function QueueDetail({ queue }: QueueDetailProps) {
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         {(['1h', '6h', '24h', '7d'] as const).map((r) => (
           <button
+            type="button"
             key={r}
             onClick={() => setRange(r)}
-            style={{
-              background: range === r ? 'rgba(255, 51, 51, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-              border: `1px solid ${range === r ? 'rgba(255, 51, 51, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
-              borderRadius: 6,
-              color: range === r ? '#ff3333' : '#888',
-              fontSize: 12,
-              padding: '4px 12px',
-              cursor: 'pointer',
-              fontFamily: 'IBM Plex Mono, monospace',
-            }}
+            style={range === r ? filterBtnActive : filterBtn}
           >
             {r}
           </button>
@@ -176,10 +171,10 @@ export function QueueDetail({ queue }: QueueDetailProps) {
         gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
         gap: 16,
       }}>
-        <Chart data={chartData} dataKey="throughput" title="Throughput (jobs/min)" color="#22c55e" domain={[since, until]} range={range} />
-        <Chart data={chartData} dataKey="failures" title="Failures (failures/min)" color="#ff3333" domain={[since, until]} range={range} />
-        <Chart data={waitingData} dataKey="waiting" title="Waiting Jobs" color="#f59e0b" domain={[since, until]} range={range} />
-        <Chart data={waitingData} dataKey="active" title="Active Jobs" color="#3b82f6" domain={[since, until]} range={range} />
+        <Chart data={chartData} dataKey="throughput" title="Throughput (jobs/min)" color={colors.green} domain={[since, until]} range={range} />
+        <Chart data={chartData} dataKey="failures" title="Failures (failures/min)" color={colors.red} domain={[since, until]} range={range} />
+        <Chart data={waitingData} dataKey="waiting" title="Waiting Jobs" color={colors.amber} domain={[since, until]} range={range} />
+        <Chart data={waitingData} dataKey="active" title="Active Jobs" color={colors.blue} domain={[since, until]} range={range} />
       </div>
 
       <JobTypeTable breakdown={jobTypesData?.breakdown || []} />
@@ -214,17 +209,19 @@ function buildEventTrends(
 }
 
 function ControlButton({ label, onClick }: { label: string; onClick: () => void }) {
+  const [hovered, setHovered] = useState(false);
+
   return (
     <button
+      type="button"
       onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
-        background: 'rgba(255, 255, 255, 0.05)',
-        border: '1px solid rgba(255, 255, 255, 0.1)',
-        borderRadius: 8,
-        color: '#ccc',
-        fontSize: 12,
+        ...glassBtn,
+        ...(hovered ? glassBtnHover : {}),
         padding: '6px 14px',
-        cursor: 'pointer',
+        fontSize: 12,
         fontFamily: 'inherit',
       }}
     >

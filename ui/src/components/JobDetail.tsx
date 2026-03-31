@@ -1,4 +1,5 @@
 import type { JobDetail as JobDetailType } from '../hooks/useJobs';
+import { glassCard, sectionLabel, codeBlock, colors } from '../theme';
 
 interface JobDetailProps {
   job: JobDetailType;
@@ -11,9 +12,7 @@ export function JobDetail({ job, onClose }: JobDetailProps) {
 
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.03)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       padding: 20,
       marginBottom: 16,
     }}>
@@ -24,25 +23,30 @@ export function JobDetail({ job, onClose }: JobDetailProps) {
       }}>
         <div>
           <span style={{
-            fontFamily: 'IBM Plex Mono, monospace',
+            fontFamily: "'IBM Plex Mono', monospace",
             fontWeight: 600,
             fontSize: 16,
             color: '#fff',
           }}>
             Job #{job.id}
           </span>
-          <span style={{ color: '#666', marginLeft: 12, fontSize: 13 }}>
+          <span style={{ color: colors.textMuted, marginLeft: 12, fontSize: 13 }}>
             {job.name}
           </span>
         </div>
         <button
+          type="button"
           onClick={onClose}
           style={{
-            background: 'none',
-            border: 'none',
-            color: '#666',
+            background: 'linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 8,
+            color: colors.textMuted,
             cursor: 'pointer',
-            fontSize: 18,
+            fontSize: 16,
+            padding: '2px 8px',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+            transition: 'all 0.2s',
           }}
         >
           ✕
@@ -75,10 +79,10 @@ export function JobDetail({ job, onClose }: JobDetailProps) {
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: 1 }}>
+      <div style={{ ...sectionLabel }}>
         {label}
       </div>
-      <div style={{ fontSize: 13, color: '#ccc', fontFamily: 'IBM Plex Mono, monospace', marginTop: 2 }}>
+      <div style={{ fontSize: 13, color: colors.textSecondary, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>
         {value}
       </div>
     </div>
@@ -88,22 +92,10 @@ function Field({ label, value }: { label: string; value: string }) {
 function CodeBlock({ label, content }: { label: string; content: string }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ fontSize: 11, color: '#666', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>
+      <div style={{ ...sectionLabel, marginBottom: 6 }}>
         {label}
       </div>
-      <pre style={{
-        background: 'rgba(0, 0, 0, 0.3)',
-        border: '1px solid rgba(255, 255, 255, 0.06)',
-        borderRadius: 8,
-        padding: 12,
-        fontSize: 12,
-        fontFamily: 'IBM Plex Mono, monospace',
-        color: '#ccc',
-        overflow: 'auto',
-        maxHeight: 300,
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-      }}>
+      <pre style={codeBlock}>
         {content}
       </pre>
     </div>

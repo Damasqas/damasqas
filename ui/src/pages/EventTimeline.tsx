@@ -1,6 +1,19 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useEvents, useEventSearch, type EventRecord } from '../hooks/useEvents';
 import { useQueues } from '../hooks/useQueues';
+import {
+  glassCard,
+  glassBtn,
+  glassInput,
+  glassSelect,
+  codeBlock,
+  filterBtn,
+  filterBtnActive,
+  glassBtnRed,
+  colors,
+  rowHoverBg,
+  sectionLabel,
+} from '../theme';
 
 type Range = '1h' | '6h' | '24h' | '7d';
 
@@ -11,34 +24,32 @@ const RANGE_MS: Record<Range, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
 };
 
-// All BullMQ v5 event types
 const EVENT_TYPES = [
   'completed', 'failed', 'added', 'waiting', 'active',
   'delayed', 'stalled', 'progress', 'removed', 'drained',
   'error', 'duplicated', 'cleaned', 'paused', 'resumed',
 ];
 
-const eventTypeColors: Record<string, string> = {
-  completed: '#22c55e',
-  failed: '#ff3333',
-  stalled: '#f59e0b',
-  active: '#3b82f6',
-  added: '#8b5cf6',
-  waiting: '#6b7280',
-  delayed: '#f97316',
-  progress: '#06b6d4',
-  removed: '#ec4899',
-  drained: '#64748b',
-  error: '#dc2626',
-  duplicated: '#a855f7',
-  cleaned: '#78716c',
-  paused: '#eab308',
-  resumed: '#84cc16',
+const eventTypeColors: Record<string, { bg: string; text: string }> = {
+  completed: { bg: colors.green, text: colors.greenText },
+  failed: { bg: colors.red, text: colors.redText },
+  stalled: { bg: colors.amber, text: colors.amberText },
+  active: { bg: colors.blue, text: colors.blueText },
+  added: { bg: colors.purple, text: colors.purpleText },
+  waiting: { bg: 'rgba(255,255,255,0.15)', text: colors.textSecondary },
+  delayed: { bg: colors.amber, text: colors.amberText },
+  progress: { bg: colors.blue, text: colors.blueText },
+  removed: { bg: colors.red, text: colors.redText },
+  drained: { bg: 'rgba(255,255,255,0.1)', text: colors.textMuted },
+  error: { bg: colors.red, text: colors.redText },
+  duplicated: { bg: colors.purple, text: colors.purpleText },
+  cleaned: { bg: 'rgba(255,255,255,0.1)', text: colors.textMuted },
+  paused: { bg: colors.amber, text: colors.amberText },
+  resumed: { bg: colors.green, text: colors.greenText },
 };
 
 const PAGE_SIZE = 50;
 
-/** Debounce a value — returns the latest value after `delay` ms of inactivity. */
 function useDebouncedValue<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -58,12 +69,8 @@ export function EventTimeline() {
   const [offset, setOffset] = useState(0);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  // Debounce job name input to avoid firing on every keystroke.
-  // The API does exact match, so partial strings return nothing anyway —
-  // debouncing prevents wasted requests during typing.
   const debouncedJobName = useDebouncedValue(jobNameInput, 400);
 
-  // Reset offset when the debounced job name changes
   const prevJobName = useRef(debouncedJobName);
   useEffect(() => {
     if (prevJobName.current !== debouncedJobName) {
@@ -78,9 +85,6 @@ export function EventTimeline() {
     [queuesData],
   );
 
-  // `since` is computed fresh inside the queryFn on every fetch (including
-  // refetchInterval ticks) so the sliding window stays accurate. We pass
-  // rangeMs instead of a frozen timestamp. See useEvents for details.
   const { data: eventsData, isLoading } = useEvents({
     rangeMs: RANGE_MS[range],
     limit: PAGE_SIZE,
@@ -108,30 +112,25 @@ export function EventTimeline() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
-        <h2 style={{ color: '#fff', fontSize: 18, fontWeight: 600, margin: 0 }}>
+        <h2 style={{ color: '#fff', fontSize: 18, fontWeight: 600, margin: 0, letterSpacing: -0.3 }}>
           Event Timeline
         </h2>
         <div style={{ display: 'flex', gap: 4 }}>
           {(Object.keys(RANGE_MS) as Range[]).map((r) => (
             <button
+              type="button"
               key={r}
               onClick={() => { setRange(r); resetPagination(); }}
               style={{
-                background: range === r ? 'rgba(255, 51, 51, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-                border: `1px solid ${range === r ? 'rgba(255, 51, 51, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
-                borderRadius: 6,
-                color: range === r ? '#ff3333' : '#888',
-                fontSize: 12,
+                ...(range === r ? filterBtnActive : filterBtn),
                 padding: '4px 12px',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
               }}
             >
               {r}
             </button>
           ))}
         </div>
-        <div style={{ marginLeft: 'auto', fontSize: 12, color: '#666', fontFamily: 'IBM Plex Mono, monospace' }}>
+        <div style={{ marginLeft: 'auto', fontSize: 12, color: colors.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>
           {total.toLocaleString()} events
         </div>
       </div>
@@ -147,7 +146,7 @@ export function EventTimeline() {
         <select
           value={queueFilter}
           onChange={(e) => { setQueueFilter(e.target.value); resetPagination(); }}
-          style={selectStyle}
+          style={glassSelect}
         >
           <option value="">All queues</option>
           {queueNames.map((q) => (
@@ -158,7 +157,7 @@ export function EventTimeline() {
         <select
           value={typeFilter}
           onChange={(e) => { setTypeFilter(e.target.value); resetPagination(); }}
-          style={selectStyle}
+          style={glassSelect}
         >
           <option value="">All types</option>
           {EVENT_TYPES.map((t) => (
@@ -171,7 +170,7 @@ export function EventTimeline() {
           placeholder="Filter by job name..."
           value={jobNameInput}
           onChange={(e) => setJobNameInput(e.target.value)}
-          style={inputStyle}
+          style={{ ...glassInput, minWidth: 150 }}
         />
 
         <form
@@ -187,16 +186,12 @@ export function EventTimeline() {
             placeholder="Full-text search..."
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            style={inputStyle}
+            style={{ ...glassInput, minWidth: 150 }}
           />
           <button type="submit" style={{
-            background: 'rgba(255, 51, 51, 0.15)',
-            border: '1px solid rgba(255, 51, 51, 0.3)',
-            borderRadius: 6,
-            color: '#ff3333',
-            fontSize: 12,
+            ...glassBtnRed,
             padding: '6px 12px',
-            cursor: 'pointer',
+            fontSize: 12,
             fontFamily: 'inherit',
           }}>
             Search
@@ -206,13 +201,9 @@ export function EventTimeline() {
               type="button"
               onClick={() => { setSearchInput(''); setSearchQuery(''); }}
               style={{
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                borderRadius: 6,
-                color: '#888',
-                fontSize: 12,
+                ...glassBtn,
                 padding: '6px 12px',
-                cursor: 'pointer',
+                fontSize: 12,
                 fontFamily: 'inherit',
               }}
             >
@@ -224,11 +215,11 @@ export function EventTimeline() {
 
       {/* Event list */}
       {isLoading ? (
-        <div style={{ color: '#666', padding: 40, textAlign: 'center' }}>
+        <div style={{ color: colors.textMuted, padding: 40, textAlign: 'center' }}>
           Loading events...
         </div>
       ) : events.length === 0 ? (
-        <div style={{ color: '#666', padding: 40, textAlign: 'center' }}>
+        <div style={{ color: colors.textMuted, padding: 40, textAlign: 'center' }}>
           No events found for the selected filters.
         </div>
       ) : (
@@ -239,11 +230,8 @@ export function EventTimeline() {
             gridTemplateColumns: '160px 100px 140px 100px 1fr',
             gap: 12,
             padding: '8px 16px',
-            fontSize: 11,
-            fontWeight: 600,
-            color: '#666',
-            textTransform: 'uppercase' as const,
-            borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+            ...sectionLabel,
+            fontSize: 9,
           }}>
             <div>Time</div>
             <div>Type</div>
@@ -251,6 +239,11 @@ export function EventTimeline() {
             <div>Job ID</div>
             <div>Job Name</div>
           </div>
+          <div style={{
+            height: 1,
+            background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+            marginBottom: 2,
+          }} />
 
           {events.map((event) => (
             <EventRow
@@ -273,23 +266,19 @@ export function EventTimeline() {
           marginTop: 20,
           padding: '12px 0',
         }}>
-          <button
+          <PaginationButton
             disabled={offset === 0}
             onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-            style={paginationBtnStyle(offset === 0)}
-          >
-            Previous
-          </button>
-          <span style={{ fontSize: 12, color: '#888', fontFamily: 'IBM Plex Mono, monospace' }}>
+            label="Previous"
+          />
+          <span style={{ fontSize: 12, color: colors.textSecondary, fontFamily: "'IBM Plex Mono', monospace" }}>
             {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total.toLocaleString()}
           </span>
-          <button
+          <PaginationButton
             disabled={offset + PAGE_SIZE >= total}
             onClick={() => setOffset(offset + PAGE_SIZE)}
-            style={paginationBtnStyle(offset + PAGE_SIZE >= total)}
-          >
-            Next
-          </button>
+            label="Next"
+          />
         </div>
       )}
     </div>
@@ -307,7 +296,7 @@ function EventRow({ event, expanded, onToggle }: {
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const color = eventTypeColors[event.eventType] || '#666';
+  const etc = eventTypeColors[event.eventType] || { bg: colors.textMuted, text: colors.textSecondary };
   const ts = new Date(event.ts);
 
   let parsedData: Record<string, unknown> | null = null;
@@ -323,9 +312,9 @@ function EventRow({ event, expanded, onToggle }: {
     <div
       onClick={onToggle}
       style={{
-        background: expanded ? 'rgba(255, 255, 255, 0.03)' : 'transparent',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
+        background: expanded ? rowHoverBg : 'transparent',
         cursor: 'pointer',
+        transition: 'all 0.15s',
       }}
     >
       <div style={{
@@ -336,34 +325,37 @@ function EventRow({ event, expanded, onToggle }: {
         alignItems: 'center',
         minWidth: 0,
       }}>
-        <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 12, color: '#999', ...cellOverflow }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: colors.textSecondary, ...cellOverflow }}>
           {ts.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
-          <span style={{ color: '#555', marginLeft: 4, fontSize: 10 }}>
+          <span style={{ color: colors.textMuted, marginLeft: 4, fontSize: 10 }}>
             {ts.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
           </span>
         </div>
         <div>
           <span style={{
-            fontSize: 11,
+            fontSize: 10,
             fontWeight: 600,
-            color,
-            background: `${color}15`,
+            color: etc.text,
+            background: `linear-gradient(135deg, ${etc.bg}22, ${etc.bg}0D)`,
             padding: '2px 8px',
             borderRadius: 6,
             display: 'inline-block',
+            border: `1px solid ${etc.bg}20`,
+            boxShadow: `0 0 6px ${etc.bg}25, inset 0 1px 0 rgba(255,255,255,0.06)`,
+            fontFamily: "'IBM Plex Mono', monospace",
           }}>
             {event.eventType}
           </span>
         </div>
-        <div style={{ fontSize: 12, color: '#ccc', ...cellOverflow }}>
+        <div style={{ fontSize: 12, color: colors.textSecondary, ...cellOverflow }}>
           {event.queue}
         </div>
-        <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: 12, color: '#888', ...cellOverflow }}>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: colors.textMuted, ...cellOverflow }}>
           {event.jobId || '—'}
         </div>
         <div style={{
           fontSize: 12,
-          color: event.jobName === '[deleted]' ? '#555' : '#aaa',
+          color: event.jobName === '[deleted]' ? colors.textMuted : colors.textSecondary,
           fontStyle: event.jobName === '[deleted]' ? 'italic' : 'normal',
           ...cellOverflow,
         }}>
@@ -375,18 +367,7 @@ function EventRow({ event, expanded, onToggle }: {
         <div style={{
           padding: '0 16px 12px 16px',
         }}>
-          <pre style={{
-            background: 'rgba(0, 0, 0, 0.3)',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
-            borderRadius: 8,
-            padding: 12,
-            fontSize: 11,
-            fontFamily: 'IBM Plex Mono, monospace',
-            color: '#aaa',
-            overflow: 'auto',
-            maxHeight: 300,
-            margin: 0,
-          }}>
+          <pre style={{ ...codeBlock, margin: 0 }}>
             {JSON.stringify(parsedData, null, 2)}
           </pre>
         </div>
@@ -395,38 +376,26 @@ function EventRow({ event, expanded, onToggle }: {
   );
 }
 
-const selectStyle: React.CSSProperties = {
-  background: 'rgba(255, 255, 255, 0.05)',
-  border: '1px solid rgba(255, 255, 255, 0.1)',
-  borderRadius: 6,
-  color: '#ccc',
-  fontSize: 12,
-  padding: '6px 10px',
-  fontFamily: 'inherit',
-  minWidth: 120,
-};
-
-const inputStyle: React.CSSProperties = {
-  background: 'rgba(255, 255, 255, 0.05)',
-  border: '1px solid rgba(255, 255, 255, 0.1)',
-  borderRadius: 6,
-  color: '#ccc',
-  fontSize: 12,
-  padding: '6px 10px',
-  fontFamily: 'inherit',
-  minWidth: 150,
-  outline: 'none',
-};
-
-function paginationBtnStyle(disabled: boolean): React.CSSProperties {
-  return {
-    background: disabled ? 'rgba(255, 255, 255, 0.02)' : 'rgba(255, 255, 255, 0.05)',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    borderRadius: 6,
-    color: disabled ? '#444' : '#ccc',
-    fontSize: 12,
-    padding: '6px 16px',
-    cursor: disabled ? 'default' : 'pointer',
-    fontFamily: 'inherit',
-  };
+function PaginationButton({ disabled, onClick, label }: {
+  disabled: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        ...glassBtn,
+        padding: '6px 16px',
+        fontSize: 12,
+        fontFamily: 'inherit',
+        opacity: disabled ? 0.4 : 1,
+        cursor: disabled ? 'default' : 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  );
 }
