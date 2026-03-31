@@ -4,6 +4,7 @@ import { StatCard } from '../components/StatCard';
 import { AlertBanner } from '../components/AlertBanner';
 import { QueueTable } from '../components/QueueTable';
 import { useOverviewComparison, computeTrend } from '../hooks/useComparison';
+import { colors } from '../theme';
 
 interface OverviewProps {
   onSelectQueue: (name: string) => void;
@@ -15,7 +16,7 @@ export function Overview({ onSelectQueue }: OverviewProps) {
   const { data: comparisonData } = useOverviewComparison();
 
   if (isLoading) {
-    return <div style={{ color: '#666', padding: 40 }}>Loading queues...</div>;
+    return <div style={{ color: colors.textMuted, padding: 40 }}>Loading queues...</div>;
   }
 
   const queues = data?.queues || [];
@@ -34,9 +35,6 @@ export function Overview({ onSelectQueue }: OverviewProps) {
   const totalStalled = queues.reduce((sum, q) => sum + q.processors.stalled, 0);
   const totalOverdue = queues.reduce((sum, q) => sum + (q.overdueDelayed || 0), 0);
 
-  // Aggregate comparison data across queues that have data in both periods.
-  // Only include queues with yesterday data in both current and yesterday totals
-  // to avoid skewing the comparison (e.g. new queues inflating current totals).
   const comparisons = comparisonData?.comparisons;
   let matchedCurrentThroughput = 0;
   let matchedCurrentFailRate = 0;

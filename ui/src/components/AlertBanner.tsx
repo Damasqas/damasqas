@@ -1,4 +1,5 @@
 import type { AnomalyRecord } from '../hooks/useAnomalies';
+import { colors, shadows } from '../theme';
 
 interface AlertBannerProps {
   anomalies: AnomalyRecord[];
@@ -13,23 +14,24 @@ export function AlertBanner({ anomalies, onClick }: AlertBannerProps) {
     <div
       onClick={onClick}
       style={{
-        background: 'rgba(255, 51, 51, 0.1)',
-        border: '1px solid rgba(255, 51, 51, 0.3)',
+        background: 'linear-gradient(135deg, rgba(185,28,28,0.08), rgba(185,28,28,0.03))',
+        border: `1px solid ${colors.redBorder}`,
         borderRadius: 12,
-        padding: '12px 20px',
+        padding: '10px 14px',
         marginBottom: 20,
         cursor: onClick ? 'pointer' : 'default',
         display: 'flex',
         alignItems: 'center',
         gap: 12,
+        boxShadow: shadows.alertCritical,
       }}
     >
       <span style={{ fontSize: 20 }}>⚠</span>
       <div>
-        <div style={{ color: '#ff3333', fontWeight: 600, fontSize: 14 }}>
+        <div style={{ color: colors.redText, fontWeight: 600, fontSize: 14 }}>
           {critical.length} critical anomal{critical.length === 1 ? 'y' : 'ies'} detected
         </div>
-        <div style={{ color: '#999', fontSize: 12, marginTop: 2 }}>
+        <div style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
           {critical.map((a) => `${a.queue}: ${a.type}`).join(' · ')}
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import { colors } from '../theme';
 
 interface ToastMessage {
   id: number;
@@ -59,17 +60,27 @@ function ToastItem({ toast, onDone }: { toast: ToastMessage; onDone: () => void 
     };
   }, [onDone]);
 
+  const isError = toast.type === 'error';
+
   return (
     <div style={{
-      background: toast.type === 'error' ? 'rgba(255, 51, 51, 0.9)' : 'rgba(34, 197, 94, 0.9)',
+      background: isError
+        ? 'linear-gradient(135deg, rgba(185,28,28,0.9), rgba(153,27,27,0.85))'
+        : 'linear-gradient(135deg, rgba(22,163,106,0.9), rgba(21,128,61,0.85))',
       color: '#fff',
       padding: '10px 16px',
-      borderRadius: 8,
+      borderRadius: 10,
       fontSize: 13,
-      fontFamily: 'IBM Plex Mono, monospace',
+      fontFamily: "'IBM Plex Mono', monospace",
       opacity,
       transition: 'opacity 0.3s ease',
       maxWidth: 300,
+      border: `1px solid ${isError ? colors.redBorder : colors.greenBorder}`,
+      boxShadow: isError
+        ? '0 4px 20px rgba(185,28,28,0.3), inset 0 1px 0 rgba(255,255,255,0.1)'
+        : '0 4px 20px rgba(22,163,106,0.3), inset 0 1px 0 rgba(255,255,255,0.1)',
+      backdropFilter: 'blur(16px)',
+      WebkitBackdropFilter: 'blur(16px)',
     }}>
       {toast.text}
     </div>

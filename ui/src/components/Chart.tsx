@@ -7,6 +7,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from 'recharts';
+import { glassCard, sectionLabel, chartTooltip } from '../theme';
 
 type Range = '1h' | '6h' | '24h' | '7d';
 
@@ -53,19 +54,15 @@ function getTickCount(range?: Range): number {
   }
 }
 
-export function Chart({ data, dataKey, title, color = '#ff3333', baselineKey, domain, range }: ChartProps) {
+export function Chart({ data, dataKey, title, color = '#dc2626', baselineKey, domain, range }: ChartProps) {
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       padding: 20,
     }}>
       <div style={{
-        fontSize: 12,
-        color: '#666',
-        textTransform: 'uppercase',
-        letterSpacing: 1,
+        ...sectionLabel,
+        fontSize: 9,
         marginBottom: 16,
       }}>
         {title}
@@ -78,35 +75,30 @@ export function Chart({ data, dataKey, title, color = '#ff3333', baselineKey, do
               <stop offset="95%" stopColor={color} stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
           <XAxis
             dataKey="time"
             type="number"
             scale="time"
             domain={domain ?? ['dataMin', 'dataMax']}
-            tick={{ fill: '#555', fontSize: 10 }}
+            tick={{ fill: 'rgba(255,255,255,0.2)', fontSize: 10 }}
             axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
             tickFormatter={(ts: number) => formatTick(ts, range)}
             tickCount={getTickCount(range)}
           />
           <YAxis
-            tick={{ fill: '#555', fontSize: 10 }}
+            tick={{ fill: 'rgba(255,255,255,0.2)', fontSize: 10 }}
             axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
           />
           <Tooltip
-            contentStyle={{
-              background: '#1a1a1a',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: 8,
-              fontSize: 12,
-            }}
+            contentStyle={chartTooltip}
             labelFormatter={(ts: number) => formatTooltipLabel(ts, range)}
           />
           {baselineKey && (
             <Area
               type="monotone"
               dataKey={baselineKey}
-              stroke="#444"
+              stroke="rgba(255,255,255,0.15)"
               fill="none"
               strokeDasharray="4 4"
             />

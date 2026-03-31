@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import { useDeadlocks, useWaitingChildren, useFlowTree } from '../hooks/useFlows';
 import { FlowTree } from '../components/FlowTree';
+import {
+  glassCard,
+  glassCardInner,
+  glassBtn,
+  glassBtnRed,
+  sectionLabel,
+  colors,
+  thStyle as baseThStyle,
+  tdStyle as baseTdStyle,
+} from '../theme';
 
 interface FlowsProps {
   onSelectQueue?: (queue: string) => void;
@@ -24,16 +34,18 @@ export function Flows({ onSelectQueue }: FlowsProps) {
 
   return (
     <div>
-      <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 16, color: '#fff' }}>
+      <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 16, color: '#fff', letterSpacing: -0.5 }}>
         Flow Dependencies
       </h2>
 
       {/* Deadlock Alerts Panel */}
       <div
         style={{
-          background: '#111',
-          border: `1px solid ${deadlocks.length > 0 ? '#ff3333' : '#1a1a1a'}`,
-          borderRadius: 8,
+          ...glassCard,
+          borderColor: deadlocks.length > 0 ? colors.redBorder : 'rgba(255,255,255,0.08)',
+          boxShadow: deadlocks.length > 0
+            ? `0 4px 24px rgba(0,0,0,0.3), 0 2px 12px ${colors.redGlow}, inset 0 1px 0 rgba(255,255,255,0.1), inset 0 -0.5px 0 rgba(255,255,255,0.03)`
+            : undefined,
           padding: 16,
           marginBottom: 24,
         }}
@@ -46,27 +58,28 @@ export function Flows({ onSelectQueue }: FlowsProps) {
             marginBottom: deadlocks.length > 0 ? 12 : 0,
           }}
         >
-          <h3 style={{ fontSize: 14, fontWeight: 600, color: '#e0e0e0', margin: 0 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff', margin: 0 }}>
             Deadlock Detection
           </h3>
           {deadlocks.length > 0 ? (
             <span
               style={{
-                background: '#ff3333',
+                background: `linear-gradient(135deg, ${colors.red}, #b91c1c)`,
                 color: '#fff',
                 fontSize: 11,
                 fontWeight: 700,
                 padding: '2px 8px',
                 borderRadius: 10,
+                boxShadow: `0 2px 8px rgba(220,38,38,0.3)`,
               }}
             >
               {deadlocks.length}
             </span>
           ) : (
-            <span style={{ color: '#22c55e', fontSize: 12 }}>No deadlocks detected</span>
+            <span style={{ color: colors.greenText, fontSize: 12 }}>No deadlocks detected</span>
           )}
           {scannedAt > 0 && (
-            <span style={{ color: '#555', fontSize: 11, marginLeft: 'auto' }}>
+            <span style={{ color: colors.textMuted, fontSize: 11, marginLeft: 'auto' }}>
               Last scan: {formatAge(Date.now() - scannedAt)} ago
             </span>
           )}
@@ -76,41 +89,41 @@ export function Flows({ onSelectQueue }: FlowsProps) {
           <div
             key={`${dl.parentQueue}:${dl.parentJobId}:${dl.childQueue}:${dl.childJobId}`}
             style={{
-              background: '#0a0a0a',
-              border: '1px solid #331111',
-              borderRadius: 6,
+              ...glassCardInner,
+              background: 'linear-gradient(135deg, rgba(185,28,28,0.06), rgba(185,28,28,0.02))',
+              borderColor: 'rgba(185,28,28,0.12)',
               padding: 12,
               marginBottom: 8,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <span style={{ color: '#ff3333', fontWeight: 600, fontSize: 12 }}>
+              <span style={{ color: colors.redText, fontWeight: 600, fontSize: 12 }}>
                 DEADLOCK
               </span>
-              <span style={{ color: '#888', fontSize: 11 }}>
+              <span style={{ color: colors.textSecondary, fontSize: 11 }}>
                 blocked {formatAge(Date.now() - dl.blockedSince)}
               </span>
             </div>
             <div style={{ fontSize: 12, lineHeight: 1.8 }}>
               <div>
-                <span style={{ color: '#888' }}>Parent: </span>
-                <span className="mono" style={{ color: '#e0e0e0' }}>
+                <span style={{ color: colors.textSecondary }}>Parent: </span>
+                <span className="mono" style={{ color: '#fff' }}>
                   {dl.parentName}
                 </span>
-                <span style={{ color: '#555' }}>
+                <span style={{ color: colors.textMuted }}>
                   {' '}({dl.parentQueue}:{dl.parentJobId})
                 </span>
               </div>
               <div>
-                <span style={{ color: '#888' }}>Blocked by: </span>
-                <span className="mono" style={{ color: '#ff6666' }}>
+                <span style={{ color: colors.textSecondary }}>Blocked by: </span>
+                <span className="mono" style={{ color: colors.redText }}>
                   {dl.childName}
                 </span>
-                <span style={{ color: '#555' }}>
+                <span style={{ color: colors.textMuted }}>
                   {' '}({dl.childQueue}:{dl.childJobId})
                 </span>
               </div>
-              <div style={{ color: '#ff6666', fontSize: 11, marginTop: 4 }}>
+              <div style={{ color: colors.redText, fontSize: 11, marginTop: 4 }}>
                 {dl.childError}
               </div>
             </div>
@@ -119,15 +132,11 @@ export function Flows({ onSelectQueue }: FlowsProps) {
                 setSelectedJob({ queue: dl.parentQueue, jobId: dl.parentJobId })
               }
               style={{
+                ...glassBtnRed,
                 marginTop: 8,
-                background: 'none',
-                border: '1px solid #ff3333',
-                color: '#ff3333',
+                padding: '4px 12px',
                 fontSize: 11,
                 fontWeight: 600,
-                padding: '4px 12px',
-                borderRadius: 4,
-                cursor: 'pointer',
                 fontFamily: 'inherit',
               }}
             >
@@ -140,38 +149,43 @@ export function Flows({ onSelectQueue }: FlowsProps) {
       {/* Waiting-Children Jobs Table */}
       <div
         style={{
-          background: '#111',
-          border: '1px solid #1a1a1a',
-          borderRadius: 8,
+          ...glassCard,
           padding: 16,
           marginBottom: 24,
         }}
       >
-        <h3 style={{ fontSize: 14, fontWeight: 600, color: '#e0e0e0', marginBottom: 12 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff', marginBottom: 12 }}>
           Jobs Waiting on Children
           {waitingJobs.length > 0 && (
-            <span style={{ color: '#888', fontWeight: 400, marginLeft: 8 }}>
+            <span style={{ color: colors.textSecondary, fontWeight: 400, marginLeft: 8 }}>
               ({waitingJobs.length})
             </span>
           )}
         </h3>
 
         {waitingJobs.length === 0 ? (
-          <div style={{ color: '#555', fontSize: 13 }}>
+          <div style={{ color: colors.textMuted, fontSize: 13 }}>
             No jobs currently waiting on children.
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid #222' }}>
-                <Th>Queue</Th>
-                <Th>Job ID</Th>
-                <Th>Name</Th>
-                <Th>Age</Th>
-                <Th>Pending</Th>
-                <Th>Completed</Th>
-                <Th>Failed</Th>
-                <Th></Th>
+              <tr>
+                <th style={baseThStyle}>Queue</th>
+                <th style={baseThStyle}>Job ID</th>
+                <th style={baseThStyle}>Name</th>
+                <th style={baseThStyle}>Age</th>
+                <th style={baseThStyle}>Pending</th>
+                <th style={baseThStyle}>Completed</th>
+                <th style={baseThStyle}>Failed</th>
+                <th style={baseThStyle}></th>
+              </tr>
+              <tr>
+                <td colSpan={8} style={{
+                  height: 1,
+                  background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+                  padding: 0,
+                }} />
               </tr>
             </thead>
             <tbody>
@@ -182,15 +196,17 @@ export function Flows({ onSelectQueue }: FlowsProps) {
                   <tr
                     key={`${job.queue}:${job.jobId}`}
                     style={{
-                      borderBottom: '1px solid #1a1a1a',
-                      background: isSelected ? '#1a1a2e' : 'transparent',
+                      background: isSelected
+                        ? 'linear-gradient(135deg, rgba(96,165,250,0.08), rgba(96,165,250,0.02))'
+                        : 'transparent',
                       cursor: 'pointer',
+                      transition: 'all 0.15s',
                     }}
                     onClick={() => setSelectedJob({ queue: job.queue, jobId: job.jobId })}
                   >
-                    <Td>
+                    <td style={baseTdStyle}>
                       <span
-                        style={{ color: '#3b82f6', cursor: 'pointer' }}
+                        style={{ color: colors.blueText, cursor: 'pointer' }}
                         onClick={(e) => {
                           e.stopPropagation();
                           onSelectQueue?.(job.queue);
@@ -198,20 +214,20 @@ export function Flows({ onSelectQueue }: FlowsProps) {
                       >
                         {job.queue}
                       </span>
-                    </Td>
-                    <Td mono>{job.jobId}</Td>
-                    <Td>{job.name}</Td>
-                    <Td>{job.timestamp > 0 ? formatAge(Date.now() - job.timestamp) : '-'}</Td>
-                    <Td>{job.pendingChildren}</Td>
-                    <Td style={{ color: '#22c55e' }}>{job.completedChildren}</Td>
-                    <Td style={{ color: job.failedChildren > 0 ? '#ff3333' : undefined }}>
+                    </td>
+                    <td style={{ ...baseTdStyle, fontFamily: "'IBM Plex Mono', monospace" }}>{job.jobId}</td>
+                    <td style={baseTdStyle}>{job.name}</td>
+                    <td style={baseTdStyle}>{job.timestamp > 0 ? formatAge(Date.now() - job.timestamp) : '-'}</td>
+                    <td style={baseTdStyle}>{job.pendingChildren}</td>
+                    <td style={{ ...baseTdStyle, color: colors.greenText }}>{job.completedChildren}</td>
+                    <td style={{ ...baseTdStyle, color: job.failedChildren > 0 ? colors.redText : undefined }}>
                       {job.failedChildren}
-                    </Td>
-                    <Td>
-                      <span style={{ color: '#555', fontSize: 11 }}>
+                    </td>
+                    <td style={baseTdStyle}>
+                      <span style={{ color: colors.textMuted, fontSize: 11 }}>
                         {isSelected ? '\u25BC' : '\u25B6'}
                       </span>
-                    </Td>
+                    </td>
                   </tr>
                 );
               })}
@@ -224,9 +240,7 @@ export function Flows({ onSelectQueue }: FlowsProps) {
       {selectedJob && (
         <div
           style={{
-            background: '#111',
-            border: '1px solid #1a1a1a',
-            borderRadius: 8,
+            ...glassCard,
             padding: 16,
           }}
         >
@@ -238,23 +252,19 @@ export function Flows({ onSelectQueue }: FlowsProps) {
               marginBottom: 12,
             }}
           >
-            <h3 style={{ fontSize: 14, fontWeight: 600, color: '#e0e0e0', margin: 0 }}>
+            <h3 style={{ fontSize: 14, fontWeight: 600, color: '#fff', margin: 0 }}>
               Flow Tree
             </h3>
-            <span className="mono" style={{ color: '#888', fontSize: 12 }}>
+            <span className="mono" style={{ color: colors.textSecondary, fontSize: 12 }}>
               {selectedJob.queue}:{selectedJob.jobId}
             </span>
             <button
               onClick={() => setSelectedJob(null)}
               style={{
+                ...glassBtn,
                 marginLeft: 'auto',
-                background: 'none',
-                border: '1px solid #333',
-                color: '#888',
                 fontSize: 11,
                 padding: '2px 8px',
-                borderRadius: 3,
-                cursor: 'pointer',
                 fontFamily: 'inherit',
               }}
             >
@@ -263,58 +273,17 @@ export function Flows({ onSelectQueue }: FlowsProps) {
           </div>
 
           {treeLoading ? (
-            <div style={{ color: '#555', fontSize: 13 }}>Loading flow tree...</div>
+            <div style={{ color: colors.textMuted, fontSize: 13 }}>Loading flow tree...</div>
           ) : treeData?.tree ? (
             <FlowTree tree={treeData.tree} />
           ) : (
-            <div style={{ color: '#555', fontSize: 13 }}>
+            <div style={{ color: colors.textMuted, fontSize: 13 }}>
               No flow tree data available for this job.
             </div>
           )}
         </div>
       )}
     </div>
-  );
-}
-
-function Th({ children }: { children?: React.ReactNode }) {
-  return (
-    <th
-      style={{
-        textAlign: 'left',
-        padding: '8px 10px',
-        color: '#666',
-        fontWeight: 500,
-        fontSize: 11,
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-      }}
-    >
-      {children}
-    </th>
-  );
-}
-
-function Td({
-  children,
-  mono,
-  style,
-}: {
-  children?: React.ReactNode;
-  mono?: boolean;
-  style?: React.CSSProperties;
-}) {
-  return (
-    <td
-      style={{
-        padding: '8px 10px',
-        color: '#e0e0e0',
-        fontFamily: mono ? 'IBM Plex Mono, monospace' : undefined,
-        ...style,
-      }}
-    >
-      {children}
-    </td>
   );
 }
 

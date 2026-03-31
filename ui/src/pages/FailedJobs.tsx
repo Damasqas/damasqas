@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQueues } from '../hooks/useQueues';
 import { useErrorGroups, useRetryJob, useRemoveJob } from '../hooks/useJobs';
 import { ErrorGroup } from '../components/ErrorGroup';
+import { colors, filterBtn, filterBtnActive } from '../theme';
 
 interface FailedJobsProps {
   queue: string | null;
@@ -25,26 +26,18 @@ export function FailedJobs({ queue, onSelectQueue }: FailedJobsProps) {
           <button
             key={q.name}
             onClick={() => setSelectedQueue(q.name)}
-            style={{
-              background: activeQueue === q.name ? 'rgba(255, 51, 51, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-              border: `1px solid ${activeQueue === q.name ? 'rgba(255, 51, 51, 0.3)' : 'rgba(255, 255, 255, 0.1)'}`,
-              borderRadius: 8,
-              color: activeQueue === q.name ? '#ff3333' : '#888',
-              fontSize: 12,
-              padding: '6px 14px',
-              cursor: 'pointer',
-              fontFamily: 'inherit',
-            }}
+            style={activeQueue === q.name ? filterBtnActive : filterBtn}
           >
             {q.name}
             {q.counts.failed > 0 && (
               <span style={{
                 marginLeft: 6,
-                background: 'rgba(255, 51, 51, 0.2)',
+                background: 'linear-gradient(135deg, rgba(185,28,28,0.2), rgba(185,28,28,0.08))',
                 padding: '1px 6px',
                 borderRadius: 8,
                 fontSize: 10,
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
+                color: colors.redText,
               }}>
                 {q.counts.failed}
               </span>
@@ -67,7 +60,7 @@ function ErrorGroupList({ queue }: { queue: string }) {
 
   if (groups.length === 0) {
     return (
-      <div style={{ color: '#666', padding: 40, textAlign: 'center' }}>
+      <div style={{ color: colors.textMuted, padding: 40, textAlign: 'center' }}>
         No recent failures for this queue.
       </div>
     );
@@ -77,7 +70,7 @@ function ErrorGroupList({ queue }: { queue: string }) {
     <div>
       <div style={{
         fontSize: 12,
-        color: '#666',
+        color: colors.textMuted,
         marginBottom: 12,
       }}>
         {groups.length} error group{groups.length !== 1 ? 's' : ''} in the last 5 minutes

@@ -1,4 +1,5 @@
 import type { QueueState } from '../hooks/useQueues';
+import { glassCard, thStyle as baseThStyle, colors, shadows, rowHoverBg, rowHoverShadow } from '../theme';
 
 interface QueueTableProps {
   queues: QueueState[];
@@ -6,42 +7,46 @@ interface QueueTableProps {
 }
 
 const statusColors: Record<string, string> = {
-  ok: '#22c55e',
-  warning: '#f59e0b',
-  critical: '#ff3333',
+  ok: colors.green,
+  warning: colors.amber,
+  critical: colors.red,
+};
+
+const statusGlows: Record<string, string> = {
+  ok: shadows.dotHealthy,
+  warning: shadows.dotWarning,
+  critical: shadows.dotCritical,
 };
 
 const trendConfig: Record<string, { symbol: string; color: string; label: string }> = {
-  draining: { symbol: '\u2193', color: '#22c55e', label: 'Draining' },
-  growing: { symbol: '\u2191', color: '#ff3333', label: 'Growing' },
-  stable: { symbol: '\u2014', color: '#666', label: 'Stable' },
-  stalled: { symbol: '\u23F8', color: '#ff3333', label: 'Stalled' },
+  draining: { symbol: '\u2193', color: colors.greenText, label: 'Draining' },
+  growing: { symbol: '\u2191', color: colors.redText, label: 'Growing' },
+  stable: { symbol: '\u2014', color: colors.textMuted, label: 'Stable' },
+  stalled: { symbol: '\u23F8', color: colors.redText, label: 'Stalled' },
 };
 
 export function QueueTable({ queues, onSelect }: QueueTableProps) {
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       overflow: 'hidden',
+      padding: 0,
     }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
-          <tr style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.06)' }}>
+          <tr>
             {['Queue', 'Status', 'Throughput', 'Failures', 'Waiting', 'Trend', 'Active', 'Locks', 'Stalled', 'Overdue'].map((h) => (
-              <th key={h} style={{
-                padding: '12px 16px',
-                textAlign: 'left',
-                fontSize: 11,
-                color: '#666',
-                textTransform: 'uppercase',
-                letterSpacing: 1,
-                fontWeight: 500,
-              }}>
+              <th key={h} style={baseThStyle}>
                 {h}
               </th>
             ))}
+          </tr>
+          <tr>
+            <td colSpan={10} style={{
+              height: 1,
+              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+              padding: 0,
+            }} />
           </tr>
         </thead>
         <tbody>
@@ -50,68 +55,71 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
               key={q.name}
               onClick={() => onSelect(q.name)}
               style={{
-                borderBottom: '1px solid rgba(255, 255, 255, 0.03)',
                 cursor: 'pointer',
+                transition: 'all 0.15s',
+                borderRadius: 8,
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)';
+                e.currentTarget.style.background = rowHoverBg;
+                e.currentTarget.style.boxShadow = rowHoverShadow;
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.boxShadow = 'none';
               }}
             >
-              <td style={{ padding: '12px 16px', fontWeight: 500, color: '#fff' }}>
+              <td style={{ padding: '9px 16px', fontWeight: 500, color: '#fff' }}>
                 {q.name}
                 {q.paused && (
-                  <span style={{ fontSize: 10, color: '#666', marginLeft: 8 }}>PAUSED</span>
+                  <span style={{ fontSize: 10, color: colors.textMuted, marginLeft: 8 }}>PAUSED</span>
                 )}
               </td>
-              <td style={{ padding: '12px 16px' }}>
+              <td style={{ padding: '9px 16px' }}>
                 <span style={{
                   display: 'inline-block',
-                  width: 8,
-                  height: 8,
+                  width: 7,
+                  height: 7,
                   borderRadius: '50%',
-                  background: statusColors[q.status] || '#666',
-                  boxShadow: q.status === 'critical' ? '0 0 8px rgba(255, 51, 51, 0.5)' : 'none',
+                  background: statusColors[q.status] || colors.textMuted,
+                  boxShadow: statusGlows[q.status] || 'none',
                 }} />
               </td>
-              <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
+              <td style={{ padding: '9px 16px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>
                 {q.metrics ? `${q.metrics.throughput.toFixed(1)}/m` : '—'}
               </td>
               <td style={{
-                padding: '12px 16px',
-                fontFamily: 'IBM Plex Mono, monospace',
+                padding: '9px 16px',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
-                color: q.metrics && q.metrics.failureRate > 0 ? '#ff3333' : 'inherit',
+                color: q.metrics && q.metrics.failureRate > 0 ? colors.redText : 'inherit',
               }}>
                 {q.metrics ? `${q.metrics.failureRate.toFixed(1)}/m` : '—'}
               </td>
-              <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
+              <td style={{ padding: '9px 16px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>
                 {q.counts.waiting.toLocaleString()}
               </td>
-              <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
+              <td style={{ padding: '9px 16px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>
                 <TrendCell drain={q.drain} />
               </td>
-              <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
+              <td style={{ padding: '9px 16px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>
                 {q.counts.active}
               </td>
-              <td style={{ padding: '12px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13 }}>
+              <td style={{ padding: '9px 16px', fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>
                 {q.processors.locks}
               </td>
               <td style={{
-                padding: '12px 16px',
-                fontFamily: 'IBM Plex Mono, monospace',
+                padding: '9px 16px',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
-                color: q.processors.stalled > 0 ? '#ff3333' : 'inherit',
+                color: q.processors.stalled > 0 ? colors.redText : 'inherit',
               }}>
                 {q.processors.stalled}
               </td>
               <td style={{
-                padding: '12px 16px',
-                fontFamily: 'IBM Plex Mono, monospace',
+                padding: '9px 16px',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
-                color: (q.overdueDelayed || 0) > 0 ? '#ff3333' : 'inherit',
+                color: (q.overdueDelayed || 0) > 0 ? colors.redText : 'inherit',
               }}>
                 {q.overdueDelayed || 0}
               </td>
@@ -120,7 +128,7 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
         </tbody>
       </table>
       {queues.length === 0 && (
-        <div style={{ padding: 40, textAlign: 'center', color: '#666' }}>
+        <div style={{ padding: 40, textAlign: 'center', color: colors.textMuted }}>
           No queues discovered yet. Waiting for Redis scan...
         </div>
       )}
@@ -130,7 +138,7 @@ export function QueueTable({ queues, onSelect }: QueueTableProps) {
 
 function TrendCell({ drain }: { drain: QueueState['drain'] }) {
   if (!drain) {
-    return <span style={{ color: '#666' }}>{'\u2014'}</span>;
+    return <span style={{ color: colors.textMuted }}>{'\u2014'}</span>;
   }
 
   const t = trendConfig[drain.trend] || trendConfig.stable!;

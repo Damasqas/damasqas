@@ -16,6 +16,17 @@ import {
   useRedisSlowlog,
 } from '../hooks/useRedisHealth';
 import type { KeyGrowth, SlowlogEntry } from '../hooks/useRedisHealth';
+import {
+  glassCard,
+  glassCardInner,
+  sectionLabel,
+  chartTooltip,
+  filterBtn,
+  filterBtnActive,
+  colors,
+  thStyle as baseThStyle,
+  tdStyle as baseTdStyle,
+} from '../theme';
 
 type Range = '1h' | '6h' | '24h' | '7d';
 
@@ -78,7 +89,7 @@ export function RedisHealth() {
   const { data: slowlogData } = useRedisSlowlog();
 
   if (isLoading) {
-    return <div style={{ color: '#666', padding: 40 }}>Loading Redis health...</div>;
+    return <div style={{ color: colors.textMuted, padding: 40 }}>Loading Redis health...</div>;
   }
 
   const snapshot = health?.snapshot;
@@ -91,14 +102,13 @@ export function RedisHealth() {
     : null;
 
   const memColor = memPercent === null
-    ? '#888'
+    ? colors.textSecondary
     : memPercent >= 90
-      ? '#ff3333'
+      ? colors.red
       : memPercent >= 75
-        ? '#f59e0b'
-        : '#22c55e';
+        ? colors.amber
+        : colors.green;
 
-  // Chart data
   const chartData = (history?.snapshots || []).map((s) => ({
     time: s.ts,
     usedMemory: s.usedMemory,
@@ -114,14 +124,15 @@ export function RedisHealth() {
       {/* Maxmemory Policy Warning Banner */}
       {warning && (
         <div style={{
-          background: 'rgba(245, 158, 11, 0.1)',
-          border: '1px solid rgba(245, 158, 11, 0.3)',
+          background: 'linear-gradient(135deg, rgba(217,119,6,0.1), rgba(217,119,6,0.04))',
+          border: `1px solid ${colors.amberBorder}`,
           borderRadius: 12,
           padding: '16px 20px',
           marginBottom: 24,
           fontSize: 13,
-          color: '#f59e0b',
+          color: colors.amberText,
           lineHeight: 1.5,
+          boxShadow: `0 2px 12px ${colors.amberGlow}, inset 0 1px 0 rgba(255,255,255,0.05)`,
         }}>
           <strong>WARNING:</strong> {warning}
         </div>
@@ -188,9 +199,7 @@ export function RedisHealth() {
 
       {/* Memory Timeline Chart */}
       <div style={{
-        background: 'rgba(255, 255, 255, 0.02)',
-        border: '1px solid rgba(255, 255, 255, 0.06)',
-        borderRadius: 12,
+        ...glassCard,
         padding: 20,
         marginBottom: 24,
       }}>
@@ -201,10 +210,8 @@ export function RedisHealth() {
           marginBottom: 16,
         }}>
           <div style={{
-            fontSize: 12,
-            color: '#666',
-            textTransform: 'uppercase',
-            letterSpacing: 1,
+            ...sectionLabel,
+            fontSize: 9,
           }}>
             Memory Usage Over Time
           </div>
@@ -214,14 +221,9 @@ export function RedisHealth() {
                 key={r}
                 onClick={() => setRange(r)}
                 style={{
-                  background: range === r ? 'rgba(255, 51, 51, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-                  border: `1px solid ${range === r ? 'rgba(255, 51, 51, 0.3)' : 'rgba(255, 255, 255, 0.08)'}`,
-                  borderRadius: 6,
+                  ...(range === r ? filterBtnActive : filterBtn),
                   padding: '4px 10px',
                   fontSize: 11,
-                  color: range === r ? '#ff3333' : '#888',
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
                 }}
               >
                 {r}
@@ -238,29 +240,24 @@ export function RedisHealth() {
                   <stop offset="95%" stopColor={memColor} stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
               <XAxis
                 dataKey="time"
                 type="number"
                 scale="time"
                 domain={domain ?? ['dataMin', 'dataMax']}
-                tick={{ fill: '#555', fontSize: 10 }}
+                tick={{ fill: 'rgba(255,255,255,0.2)', fontSize: 10 }}
                 axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
                 tickFormatter={(ts: number) => formatTick(ts, range)}
                 tickCount={getTickCount(range)}
               />
               <YAxis
-                tick={{ fill: '#555', fontSize: 10 }}
+                tick={{ fill: 'rgba(255,255,255,0.2)', fontSize: 10 }}
                 axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
                 tickFormatter={(v: number) => formatBytesShort(v)}
               />
               <Tooltip
-                contentStyle={{
-                  background: '#1a1a1a',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 8,
-                  fontSize: 12,
-                }}
+                contentStyle={chartTooltip}
                 labelFormatter={formatTooltipLabel}
                 formatter={(value: number, name: string) => [
                   formatBytes(value),
@@ -271,7 +268,7 @@ export function RedisHealth() {
                 <Area
                   type="monotone"
                   dataKey="maxmemory"
-                  stroke="#444"
+                  stroke="rgba(255,255,255,0.15)"
                   fill="none"
                   strokeDasharray="4 4"
                   name="maxmemory"
@@ -288,7 +285,7 @@ export function RedisHealth() {
             </AreaChart>
           </ResponsiveContainer>
         ) : (
-          <div style={{ color: '#555', fontSize: 13, padding: 20 }}>
+          <div style={{ color: colors.textMuted, fontSize: 13, padding: 20 }}>
             Collecting data...
           </div>
         )}
@@ -327,78 +324,82 @@ export function RedisHealth() {
 function GrowthTable({ growth }: { growth: KeyGrowth[] }) {
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       padding: 20,
     }}>
       <div style={{
-        fontSize: 12,
-        color: '#666',
-        textTransform: 'uppercase',
-        letterSpacing: 1,
+        ...sectionLabel,
+        fontSize: 9,
         marginBottom: 16,
       }}>
         Top Growth Contributors
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
-          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-            <th style={thStyle}>Queue</th>
-            <th style={thStyle}>Key</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>Entries</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>Growth</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>Memory</th>
+          <tr>
+            <th style={baseThStyle}>Queue</th>
+            <th style={baseThStyle}>Key</th>
+            <th style={{ ...baseThStyle, textAlign: 'right' }}>Entries</th>
+            <th style={{ ...baseThStyle, textAlign: 'right' }}>Growth</th>
+            <th style={{ ...baseThStyle, textAlign: 'right' }}>Memory</th>
+          </tr>
+          <tr>
+            <td colSpan={5} style={{
+              height: 1,
+              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+              padding: 0,
+            }} />
           </tr>
         </thead>
         <tbody>
           {growth.slice(0, 10).map((g) => (
             <Fragment key={`${g.queue}:${g.keyType}`}>
-            <tr style={{ borderBottom: g.recommendation ? 'none' : '1px solid rgba(255,255,255,0.04)' }}>
-              <td style={tdStyle}>
-                <span style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{g.queue}</span>
+            <tr>
+              <td style={baseTdStyle}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{g.queue}</span>
               </td>
-              <td style={tdStyle}>
+              <td style={baseTdStyle}>
                 <span style={{
-                  background: 'rgba(255,255,255,0.06)',
+                  background: 'linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))',
                   padding: '2px 6px',
                   borderRadius: 4,
                   fontSize: 11,
-                  fontFamily: 'IBM Plex Mono, monospace',
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  border: '1px solid rgba(255,255,255,0.06)',
                 }}>
                   {g.keyType}
                 </span>
               </td>
-              <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace' }}>
+              <td style={{ ...baseTdStyle, textAlign: 'right', fontFamily: "'IBM Plex Mono', monospace" }}>
                 {g.entries.toLocaleString()}
               </td>
               <td style={{
-                ...tdStyle,
+                ...baseTdStyle,
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
-                color: g.entryDelta > 0 ? '#ff3333' : '#888',
+                fontFamily: "'IBM Plex Mono', monospace",
+                color: g.entryDelta > 0 ? colors.redText : colors.textSecondary,
               }}>
                 {g.entryDelta > 0 ? `+${g.entryDelta.toLocaleString()}` : g.entryDelta.toLocaleString()}
               </td>
               <td style={{
-                ...tdStyle,
+                ...baseTdStyle,
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
               }}>
                 {g.memoryBytes != null ? formatBytesShort(g.memoryBytes) : '--'}
                 {g.memoryDelta != null && g.memoryDelta > 0 && (
-                  <span style={{ color: '#ff3333', fontSize: 10, marginLeft: 4 }}>
+                  <span style={{ color: colors.redText, fontSize: 10, marginLeft: 4 }}>
                     +{formatBytesShort(g.memoryDelta)}
                   </span>
                 )}
               </td>
             </tr>
             {g.recommendation && (
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+              <tr>
                 <td colSpan={5} style={{
                   padding: '4px 12px 10px',
                   fontSize: 11,
-                  color: '#f59e0b',
+                  color: colors.amberText,
                   fontStyle: 'italic',
                 }}>
                   {g.recommendation}
@@ -417,7 +418,6 @@ function KeySizeTable({ keySizes, collectedAt }: {
   keySizes: Array<{ queue: string; keyType: string; entryCount: number; memoryBytes: number | null }>;
   collectedAt: number | null;
 }) {
-  // Aggregate by queue
   const queueMap = new Map<string, { entries: number; memory: number }>();
   for (const ks of keySizes) {
     const existing = queueMap.get(ks.queue) || { entries: 0, memory: 0 };
@@ -430,9 +430,7 @@ function KeySizeTable({ keySizes, collectedAt }: {
 
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       padding: 20,
     }}>
       <div style={{
@@ -442,37 +440,42 @@ function KeySizeTable({ keySizes, collectedAt }: {
         marginBottom: 16,
       }}>
         <div style={{
-          fontSize: 12,
-          color: '#666',
-          textTransform: 'uppercase',
-          letterSpacing: 1,
+          ...sectionLabel,
+          fontSize: 9,
         }}>
           Key Sizes by Queue
         </div>
         {collectedAt && (
-          <div style={{ fontSize: 10, color: '#555' }}>
+          <div style={{ fontSize: 10, color: colors.textMuted }}>
             {new Date(collectedAt).toLocaleTimeString()}
           </div>
         )}
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
-          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-            <th style={thStyle}>Queue</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>Total Entries</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>Memory</th>
+          <tr>
+            <th style={baseThStyle}>Queue</th>
+            <th style={{ ...baseThStyle, textAlign: 'right' }}>Total Entries</th>
+            <th style={{ ...baseThStyle, textAlign: 'right' }}>Memory</th>
+          </tr>
+          <tr>
+            <td colSpan={3} style={{
+              height: 1,
+              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+              padding: 0,
+            }} />
           </tr>
         </thead>
         <tbody>
           {sorted.slice(0, 15).map(([queue, data]) => (
-            <tr key={queue} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-              <td style={tdStyle}>
-                <span style={{ fontFamily: 'IBM Plex Mono, monospace' }}>{queue}</span>
+            <tr key={queue}>
+              <td style={baseTdStyle}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{queue}</span>
               </td>
-              <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace' }}>
+              <td style={{ ...baseTdStyle, textAlign: 'right', fontFamily: "'IBM Plex Mono', monospace" }}>
                 {data.entries.toLocaleString()}
               </td>
-              <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'IBM Plex Mono, monospace' }}>
+              <td style={{ ...baseTdStyle, textAlign: 'right', fontFamily: "'IBM Plex Mono', monospace" }}>
                 {data.memory > 0 ? formatBytesShort(data.memory) : '--'}
               </td>
             </tr>
@@ -486,27 +489,30 @@ function KeySizeTable({ keySizes, collectedAt }: {
 function SlowlogTable({ entries }: { entries: SlowlogEntry[] }) {
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       padding: 20,
     }}>
       <div style={{
-        fontSize: 12,
-        color: '#666',
-        textTransform: 'uppercase',
-        letterSpacing: 1,
+        ...sectionLabel,
+        fontSize: 9,
         marginBottom: 16,
       }}>
         Slow Commands
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
-          <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-            <th style={thStyle}>Time</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>Duration</th>
-            <th style={thStyle}>Command</th>
-            <th style={thStyle}>BullMQ</th>
+          <tr>
+            <th style={baseThStyle}>Time</th>
+            <th style={{ ...baseThStyle, textAlign: 'right' }}>Duration</th>
+            <th style={baseThStyle}>Command</th>
+            <th style={baseThStyle}>BullMQ</th>
+          </tr>
+          <tr>
+            <td colSpan={4} style={{
+              height: 1,
+              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+              padding: 0,
+            }} />
           </tr>
         </thead>
         <tbody>
@@ -514,11 +520,10 @@ function SlowlogTable({ entries }: { entries: SlowlogEntry[] }) {
             <tr
               key={i}
               style={{
-                borderBottom: '1px solid rgba(255,255,255,0.04)',
-                background: entry.isBullMQ ? 'rgba(255, 51, 51, 0.04)' : 'transparent',
+                background: entry.isBullMQ ? 'linear-gradient(135deg, rgba(185,28,28,0.04), rgba(185,28,28,0.01))' : 'transparent',
               }}
             >
-              <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+              <td style={{ ...baseTdStyle, whiteSpace: 'nowrap' }}>
                 {new Date(entry.ts).toLocaleTimeString('en-US', {
                   hour: 'numeric',
                   minute: '2-digit',
@@ -526,18 +531,18 @@ function SlowlogTable({ entries }: { entries: SlowlogEntry[] }) {
                 })}
               </td>
               <td style={{
-                ...tdStyle,
+                ...baseTdStyle,
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
-                color: entry.durationUs > 100000 ? '#ff3333' : entry.durationUs > 10000 ? '#f59e0b' : '#e0e0e0',
+                fontFamily: "'IBM Plex Mono', monospace",
+                color: entry.durationUs > 100000 ? colors.redText : entry.durationUs > 10000 ? colors.amberText : colors.textSecondary,
               }}>
                 {entry.durationUs >= 1000
                   ? `${(entry.durationUs / 1000).toFixed(1)}ms`
                   : `${entry.durationUs}us`}
               </td>
               <td style={{
-                ...tdStyle,
-                fontFamily: 'IBM Plex Mono, monospace',
+                ...baseTdStyle,
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 11,
                 maxWidth: 400,
                 overflow: 'hidden',
@@ -546,15 +551,17 @@ function SlowlogTable({ entries }: { entries: SlowlogEntry[] }) {
               }}>
                 {entry.command}
               </td>
-              <td style={tdStyle}>
+              <td style={baseTdStyle}>
                 {entry.isBullMQ && (
                   <span style={{
-                    background: 'rgba(255, 51, 51, 0.15)',
-                    color: '#ff3333',
+                    background: 'linear-gradient(135deg, rgba(185,28,28,0.18), rgba(185,28,28,0.06))',
+                    color: colors.redText,
                     padding: '2px 6px',
                     borderRadius: 4,
                     fontSize: 10,
                     fontWeight: 600,
+                    border: `1px solid ${colors.redBorder}`,
+                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
                   }}>
                     BullMQ
                   </span>
@@ -567,18 +574,3 @@ function SlowlogTable({ entries }: { entries: SlowlogEntry[] }) {
     </div>
   );
 }
-
-const thStyle: React.CSSProperties = {
-  textAlign: 'left',
-  padding: '8px 12px',
-  fontSize: 11,
-  color: '#666',
-  textTransform: 'uppercase',
-  letterSpacing: 0.5,
-  fontWeight: 500,
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '8px 12px',
-  color: '#e0e0e0',
-};

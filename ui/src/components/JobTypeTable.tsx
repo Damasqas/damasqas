@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { JobTypeBreakdown } from '../hooks/useJobTypes';
+import { glassCard, thStyle as baseThStyle, colors, rowHoverBg, rowHoverShadow } from '../theme';
 
 interface JobTypeTableProps {
   breakdown: JobTypeBreakdown[];
@@ -49,36 +50,35 @@ export function JobTypeTable({ breakdown }: JobTypeTableProps) {
 
   return (
     <div style={{
-      background: 'rgba(255, 255, 255, 0.02)',
-      border: '1px solid rgba(255, 255, 255, 0.06)',
-      borderRadius: 12,
+      ...glassCard,
       overflow: 'hidden',
       marginTop: 24,
+      padding: 0,
     }}>
       <div style={{
         padding: '14px 16px',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
         fontSize: 14,
         fontWeight: 600,
         color: '#fff',
+        letterSpacing: -0.3,
       }}>
         Job Type Breakdown
       </div>
+      <div style={{
+        height: 1,
+        background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+      }} />
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
-          <tr style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.06)' }}>
+          <tr>
             {COLUMNS.map((col) => (
               <th
                 key={col.key}
                 onClick={() => handleSort(col.key)}
                 style={{
-                  padding: '10px 16px',
+                  ...baseThStyle,
                   textAlign: col.align || 'left',
-                  fontSize: 11,
-                  color: sortKey === col.key ? '#ff3333' : '#666',
-                  textTransform: 'uppercase',
-                  letterSpacing: 1,
-                  fontWeight: 500,
+                  color: sortKey === col.key ? colors.redText : 'rgba(255,255,255,0.2)',
                   cursor: 'pointer',
                   userSelect: 'none',
                 }}
@@ -90,71 +90,83 @@ export function JobTypeTable({ breakdown }: JobTypeTableProps) {
               </th>
             ))}
           </tr>
+          <tr>
+            <td colSpan={7} style={{
+              height: 1,
+              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)',
+              padding: 0,
+            }} />
+          </tr>
         </thead>
         <tbody>
           {sorted.map((row) => (
             <tr
               key={row.jobName}
-              style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.03)' }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.03)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = rowHoverBg;
+                e.currentTarget.style.boxShadow = rowHoverShadow;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
             >
               <td style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 fontWeight: 500,
                 color: '#fff',
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
               }}>
                 {row.jobName}
               </td>
               <td style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
-                color: '#22c55e',
+                color: colors.greenText,
               }}>
                 {row.completed.toLocaleString()}
               </td>
               <td style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
-                color: row.failed > 0 ? '#ff3333' : 'inherit',
+                color: row.failed > 0 ? colors.redText : 'inherit',
               }}>
                 {row.failed.toLocaleString()}
               </td>
               <td style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
-                color: row.failRatePct > 10 ? '#ff3333' : row.failRatePct > 5 ? '#f59e0b' : 'inherit',
+                color: row.failRatePct > 10 ? colors.redText : row.failRatePct > 5 ? colors.amberText : 'inherit',
               }}>
                 {row.failRatePct.toFixed(1)}%
               </td>
               <td style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
               }}>
                 {formatMs(row.avgWaitMs)}
               </td>
               <td style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
               }}>
                 {formatMs(row.avgProcessMs)}
               </td>
               <td style={{
-                padding: '10px 16px',
+                padding: '9px 16px',
                 textAlign: 'right',
-                fontFamily: 'IBM Plex Mono, monospace',
+                fontFamily: "'IBM Plex Mono', monospace",
                 fontSize: 13,
               }}>
                 {formatMs(row.p95ProcessMs)}
@@ -164,7 +176,7 @@ export function JobTypeTable({ breakdown }: JobTypeTableProps) {
         </tbody>
       </table>
       {breakdown.length === 0 && (
-        <div style={{ padding: 32, textAlign: 'center', color: '#666', fontSize: 13 }}>
+        <div style={{ padding: 32, textAlign: 'center', color: colors.textMuted, fontSize: 13 }}>
           No job type data available yet. Waiting for completed events...
         </div>
       )}
