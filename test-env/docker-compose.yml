@@ -29,8 +29,9 @@ services:
     command: node dist/index.js --redis redis://redis:6379 --poll-interval 1 --verbose
     environment:
       DAMASQAS_DATA_DIR: /data
-    volumes:
-      - damasqas-data:/data
+    # Use tmpfs so SQLite resets with Redis on restart (no stale dashboard data)
+    tmpfs:
+      - /data
     depends_on:
       redis:
         condition: service_healthy
@@ -38,6 +39,3 @@ services:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3888/api/health"]
       interval: 5s
       timeout: 3s
-
-volumes:
-  damasqas-data:
