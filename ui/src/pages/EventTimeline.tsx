@@ -118,6 +118,7 @@ export function EventTimeline() {
         <div style={{ display: 'flex', gap: 4 }}>
           {(Object.keys(RANGE_MS) as Range[]).map((r) => (
             <button
+              type="button"
               key={r}
               onClick={() => { setRange(r); resetPagination(); }}
               style={{
@@ -340,7 +341,7 @@ function EventRow({ event, expanded, onToggle }: {
             borderRadius: 6,
             display: 'inline-block',
             border: `1px solid ${etc.bg}20`,
-            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
+            boxShadow: `0 0 6px ${etc.bg}25, inset 0 1px 0 rgba(255,255,255,0.06)`,
             fontFamily: "'IBM Plex Mono', monospace",
           }}>
             {event.eventType}
@@ -382,6 +383,7 @@ function PaginationButton({ disabled, onClick, label }: {
 }) {
   return (
     <button
+      type="button"
       disabled={disabled}
       onClick={onClick}
       style={{

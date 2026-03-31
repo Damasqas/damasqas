@@ -65,6 +65,8 @@ function FlowTreeNode({
           borderLeft: `3px solid ${borderColor}`,
           borderRadius: 6,
           cursor: hasChildren || onJobClick ? 'pointer' : 'default',
+          backdropFilter: depth === 0 ? 'blur(8px)' : undefined,
+          WebkitBackdropFilter: depth === 0 ? 'blur(8px)' : undefined,
           boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
           transition: 'all 0.15s',
         }}
@@ -95,7 +97,7 @@ function FlowTreeNode({
               fontSize: 10,
               fontWeight: 700,
               padding: '1px 6px',
-              borderRadius: 4,
+              borderRadius: 6,
               letterSpacing: 0.5,
               boxShadow: `0 2px 8px rgba(220,38,38,0.3)`,
             }}
@@ -111,7 +113,7 @@ function FlowTreeNode({
               fontSize: 10,
               fontWeight: 700,
               padding: '1px 6px',
-              borderRadius: 4,
+              borderRadius: 6,
               letterSpacing: 0.5,
               boxShadow: `0 2px 8px rgba(217,119,6,0.3)`,
             }}
@@ -133,6 +135,7 @@ function FlowTreeNode({
 
         {onJobClick && (
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               onJobClick(node.queue, node.jobId);
@@ -195,12 +198,12 @@ function StateBadge({ state }: { state: FlowJobState }) {
         fontSize: 10,
         fontWeight: 600,
         padding: '1px 6px',
-        borderRadius: 4,
+        borderRadius: 6,
         border: `1px solid ${c.bg}25`,
         textTransform: 'uppercase',
         letterSpacing: 0.5,
         flexShrink: 0,
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
+        boxShadow: `0 0 6px ${c.bg}30, inset 0 1px 0 rgba(255,255,255,0.06)`,
       }}
     >
       {state}

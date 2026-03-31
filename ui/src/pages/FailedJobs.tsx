@@ -24,6 +24,7 @@ export function FailedJobs({ queue, onSelectQueue }: FailedJobsProps) {
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         {queues.map((q) => (
           <button
+            type="button"
             key={q.name}
             onClick={() => setSelectedQueue(q.name)}
             style={activeQueue === q.name ? filterBtnActive : filterBtn}

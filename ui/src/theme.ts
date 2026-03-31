@@ -117,6 +117,7 @@ export const glassBtn: CSSProperties = {
 export const glassBtnHover: CSSProperties = {
   background: 'linear-gradient(135deg, rgba(255,255,255,0.1), rgba(255,255,255,0.04))',
   borderColor: 'rgba(255,255,255,0.12)',
+  boxShadow: '0 2px 8px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.1)',
 };
 
 /** Red button variant */
@@ -210,22 +211,6 @@ export const chartTooltip: CSSProperties = {
   boxShadow: '0 4px 20px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)',
   backdropFilter: 'blur(16px)',
 };
-
-// ── Pill / badge helpers ───────────────────────────────────────────────
-
-export function pillStyle(bg: string, text: string, border: string): CSSProperties {
-  return {
-    background: `linear-gradient(135deg, ${bg}, ${bg.replace(/[\d.]+\)$/, (m) => `${Math.max(0, parseFloat(m) * 0.4).toFixed(2)})}`)})`,
-    color: text,
-    border: `1px solid ${border}`,
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
-    padding: '2px 8px',
-    borderRadius: 6,
-    fontSize: 10,
-    fontWeight: 600,
-    fontFamily: "'IBM Plex Mono', monospace",
-  };
-}
 
 // ── Row hover helper ───────────────────────────────────────────────────
 

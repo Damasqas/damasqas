@@ -129,6 +129,7 @@ function NavButton({ active, onClick, children }: {
 
   return (
     <button
+      type="button"
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -150,7 +151,9 @@ function NavButton({ active, onClick, children }: {
         fontFamily: 'inherit',
         boxShadow: active
           ? '0 2px 8px rgba(185,28,28,0.1), inset 0 1px 0 rgba(255,255,255,0.06)'
-          : 'none',
+          : hovered
+            ? 'inset 0 1px 0 rgba(255,255,255,0.06)'
+            : 'none',
         transition: 'all 0.2s',
       }}
     >

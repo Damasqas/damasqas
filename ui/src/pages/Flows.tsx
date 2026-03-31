@@ -128,6 +128,7 @@ export function Flows({ onSelectQueue }: FlowsProps) {
               </div>
             </div>
             <button
+              type="button"
               onClick={() =>
                 setSelectedJob({ queue: dl.parentQueue, jobId: dl.parentJobId })
               }
@@ -259,6 +260,7 @@ export function Flows({ onSelectQueue }: FlowsProps) {
               {selectedJob.queue}:{selectedJob.jobId}
             </span>
             <button
+              type="button"
               onClick={() => setSelectedJob(null)}
               style={{
                 ...glassBtn,

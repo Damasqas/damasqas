@@ -35,6 +35,7 @@ export function JobDetail({ job, onClose }: JobDetailProps) {
           </span>
         </div>
         <button
+          type="button"
           onClick={onClose}
           style={{
             background: 'linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))',

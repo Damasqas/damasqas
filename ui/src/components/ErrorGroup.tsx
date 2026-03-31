@@ -48,7 +48,7 @@ export function ErrorGroup({ group, queue, onRetry, onRemove }: ErrorGroupProps)
           borderRadius: 6,
           border: `1px solid ${colors.redBorder}`,
           fontFamily: "'IBM Plex Mono', monospace",
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+          boxShadow: '0 0 8px rgba(185,28,28,0.2), inset 0 1px 0 rgba(255,255,255,0.08)',
         }}>
           {group.count}
         </span>
@@ -113,6 +113,7 @@ function ActionButton({ label, onClick, danger }: {
 }) {
   return (
     <button
+      type="button"
       onClick={(e) => {
         e.stopPropagation();
         onClick();

@@ -7,7 +7,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from 'recharts';
-import { glassCard, sectionLabel, chartTooltip } from '../theme';
+import { glassCard, sectionLabel, chartTooltip, colors } from '../theme';
 
 type Range = '1h' | '6h' | '24h' | '7d';
 
@@ -54,7 +54,7 @@ function getTickCount(range?: Range): number {
   }
 }
 
-export function Chart({ data, dataKey, title, color = '#dc2626', baselineKey, domain, range }: ChartProps) {
+export function Chart({ data, dataKey, title, color = colors.red, baselineKey, domain, range }: ChartProps) {
   return (
     <div style={{
       ...glassCard,

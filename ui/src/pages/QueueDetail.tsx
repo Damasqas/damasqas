@@ -156,6 +156,7 @@ export function QueueDetail({ queue }: QueueDetailProps) {
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         {(['1h', '6h', '24h', '7d'] as const).map((r) => (
           <button
+            type="button"
             key={r}
             onClick={() => setRange(r)}
             style={range === r ? filterBtnActive : filterBtn}
@@ -212,6 +213,7 @@ function ControlButton({ label, onClick }: { label: string; onClick: () => void 
 
   return (
     <button
+      type="button"
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

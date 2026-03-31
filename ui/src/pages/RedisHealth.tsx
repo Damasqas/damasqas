@@ -24,6 +24,8 @@ import {
   filterBtn,
   filterBtnActive,
   colors,
+  rowHoverBg,
+  rowHoverShadow,
   thStyle as baseThStyle,
   tdStyle as baseTdStyle,
 } from '../theme';
@@ -218,6 +220,7 @@ export function RedisHealth() {
           <div style={{ display: 'flex', gap: 4 }}>
             {(['1h', '6h', '24h', '7d'] as Range[]).map((r) => (
               <button
+                type="button"
                 key={r}
                 onClick={() => setRange(r)}
                 style={{
@@ -354,7 +357,10 @@ function GrowthTable({ growth }: { growth: KeyGrowth[] }) {
         <tbody>
           {growth.slice(0, 10).map((g) => (
             <Fragment key={`${g.queue}:${g.keyType}`}>
-            <tr>
+            <tr
+              onMouseEnter={(e) => { e.currentTarget.style.background = rowHoverBg; e.currentTarget.style.boxShadow = rowHoverShadow; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.boxShadow = 'none'; }}
+            >
               <td style={baseTdStyle}>
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{g.queue}</span>
               </td>
@@ -362,10 +368,11 @@ function GrowthTable({ growth }: { growth: KeyGrowth[] }) {
                 <span style={{
                   background: 'linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))',
                   padding: '2px 6px',
-                  borderRadius: 4,
+                  borderRadius: 6,
                   fontSize: 11,
                   fontFamily: "'IBM Plex Mono', monospace",
                   border: '1px solid rgba(255,255,255,0.06)',
+                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
                 }}>
                   {g.keyType}
                 </span>
@@ -468,7 +475,11 @@ function KeySizeTable({ keySizes, collectedAt }: {
         </thead>
         <tbody>
           {sorted.slice(0, 15).map(([queue, data]) => (
-            <tr key={queue}>
+            <tr
+              key={queue}
+              onMouseEnter={(e) => { e.currentTarget.style.background = rowHoverBg; e.currentTarget.style.boxShadow = rowHoverShadow; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.boxShadow = 'none'; }}
+            >
               <td style={baseTdStyle}>
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>{queue}</span>
               </td>
@@ -521,7 +532,10 @@ function SlowlogTable({ entries }: { entries: SlowlogEntry[] }) {
               key={i}
               style={{
                 background: entry.isBullMQ ? 'linear-gradient(135deg, rgba(185,28,28,0.04), rgba(185,28,28,0.01))' : 'transparent',
+                transition: 'all 0.15s',
               }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = rowHoverBg; e.currentTarget.style.boxShadow = rowHoverShadow; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = entry.isBullMQ ? 'linear-gradient(135deg, rgba(185,28,28,0.04), rgba(185,28,28,0.01))' : 'transparent'; e.currentTarget.style.boxShadow = 'none'; }}
             >
               <td style={{ ...baseTdStyle, whiteSpace: 'nowrap' }}>
                 {new Date(entry.ts).toLocaleTimeString('en-US', {
@@ -557,7 +571,7 @@ function SlowlogTable({ entries }: { entries: SlowlogEntry[] }) {
                     background: 'linear-gradient(135deg, rgba(185,28,28,0.18), rgba(185,28,28,0.06))',
                     color: colors.redText,
                     padding: '2px 6px',
-                    borderRadius: 4,
+                    borderRadius: 6,
                     fontSize: 10,
                     fontWeight: 600,
                     border: `1px solid ${colors.redBorder}`,

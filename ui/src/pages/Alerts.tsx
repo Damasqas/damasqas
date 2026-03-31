@@ -92,7 +92,7 @@ function AnomalyRow({ anomaly }: { anomaly: AnomalyRecord }) {
           border: `1px solid ${sev.border}`,
           fontFamily: "'IBM Plex Mono', monospace",
           letterSpacing: 0.5,
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+          boxShadow: `0 0 8px ${sev.bg}30, inset 0 1px 0 rgba(255,255,255,0.08)`,
         }}>
           {anomaly.severity}
         </span>
