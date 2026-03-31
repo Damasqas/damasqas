@@ -1,0 +1,16 @@
+{
+  "name": "damasqas-integration-tests",
+  "private": true,
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0",
+    "bullmq": "^5.0.0",
+    "ioredis": "^5.3.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
