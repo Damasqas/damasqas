@@ -737,7 +737,7 @@ app.get("/", (req, res) => {
     <button class="btn btn-stop" onclick="apiCall('/producers/stop-all', 'POST', null, {type:'info', title:'Stopped All Producers', bodyFn: function() { return 'Stopped all producers'; }})">Stop All <kbd>x</kbd></button>
     <div class="separator"></div>
     <button class="btn btn-reset" onclick="resetAll()">Reset All Chaos <kbd>r</kbd></button>
-    <button class="btn btn-danger" onclick="if(confirm('Drain all failed/waiting jobs from all queues?')) apiCall('/drain-all', 'POST', null, {type:'success', title:'Drained All Queues', bodyFn: function() { return 'Drained all waiting jobs from all queues'; }})">Drain All Queues</button>
+    <button class="btn btn-danger" onclick="if(confirm('Drain all waiting and delayed jobs from all queues?')) apiCall('/drain-all', 'POST', null, {type:'success', title:'Drained All Queues', bodyFn: function() { return 'Drained all waiting and delayed jobs from all queues'; }})">Drain All Queues</button>
   </div>
 
   <!-- Chaos Presets -->
@@ -820,7 +820,7 @@ app.get("/", (req, res) => {
         <div class="actions">
           <button class="btn btn-sm btn-action" onclick="openFloodModal('${q}')">Flood...</button>
           <button class="btn btn-sm btn-reset" onclick="resetQueue('${q}')">Reset Chaos</button>
-          <button class="btn btn-sm btn-danger" onclick="apiCall('/drain/${q}', 'POST', null, {type:'success', title:'Queue Drained', bodyFn: function() { return 'Drained all waiting jobs from ${q}'; }})">Drain</button>
+          <button class="btn btn-sm btn-danger" onclick="apiCall('/drain/${q}', 'POST', null, {type:'success', title:'Queue Drained', bodyFn: function() { return 'Drained all waiting and delayed jobs from ${q}'; }})">Drain</button>
           <button class="btn btn-sm btn-danger" onclick="apiCall('/clean/${q}/failed', 'POST', null, {type:'success', title:'Failed Jobs Cleared', bodyFn: function(d) { return 'Cleared ' + d.cleaned + ' failed jobs from ${q}'; }})">Clear Failed</button>
         </div>
       </div>
@@ -1200,6 +1200,7 @@ app.get("/", (req, res) => {
   async function refresh() {
     try {
       var res = await fetch('/status');
+      if (!res.ok) throw new Error('status endpoint returned ' + res.status);
       var data = await res.json();
       var anyRunning = false;
       var anyJobs = false;
