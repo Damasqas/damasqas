@@ -12,6 +12,45 @@ Then open [http://localhost:3888](http://localhost:3888).
 
 ---
 
+## Table of Contents
+
+- [Why Damasqas?](#why-damasqas)
+- [Features](#features)
+  - [Real-Time Dashboard](#real-time-dashboard)
+  - [Automatic Queue Discovery](#automatic-queue-discovery)
+  - [Historical Data Backfill](#historical-data-backfill)
+  - [Anomaly Detection](#anomaly-detection)
+  - [Error Clustering](#error-clustering)
+  - [Rule-Based Alerting](#rule-based-alerting)
+  - [Drain Rate Analysis & Capacity Planning](#drain-rate-analysis--capacity-planning)
+  - [Event Timeline & Full-Text Search](#event-timeline--full-text-search)
+  - [Job Type Breakdown](#job-type-breakdown)
+  - [Flow Visualization & Deadlock Detection](#flow-visualization--deadlock-detection)
+  - [Redis Health Monitoring](#redis-health-monitoring)
+  - [Comparative Analytics](#comparative-analytics)
+  - [Clock Skew Compensation](#clock-skew-compensation)
+  - [Operations](#operations)
+  - [Headless Mode](#headless-mode)
+  - [Graceful Shutdown](#graceful-shutdown)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+  - [CLI Flags](#cli-flags)
+  - [Environment Variables](#environment-variables)
+  - [Config File](#config-file)
+- [Architecture](#architecture)
+  - [Redis Connections](#redis-connections)
+  - [Startup Sequence](#startup-sequence)
+  - [SQLite Storage](#sqlite-storage)
+  - [API Server](#api-server)
+  - [Collection Cadences](#collection-cadences)
+  - [Data Retention](#data-retention)
+  - [BullMQ Compatibility](#bullmq-compatibility)
+- [API Reference](#api-reference)
+- [Local Development](#local-development)
+- [License](#license)
+
+---
+
 ## Why Damasqas?
 
 Most BullMQ monitoring tools require you to instrument your worker code or only show you a snapshot of current queue state. Damasqas takes a different approach:
