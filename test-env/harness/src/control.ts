@@ -918,7 +918,7 @@ app.get("/", (req, res) => {
 </div>
 
 <!-- Flood Modal -->
-<div class="modal-overlay" id="flood-modal">
+<div class="modal-overlay" id="flood-modal" onclick="if(event.target===this)closeFloodModal()">
   <div class="glass-elevated modal">
     <h3>Add Jobs to <span id="flood-queue-name"></span></h3>
     <div class="modal-preset-btns">
@@ -927,7 +927,7 @@ app.get("/", (req, res) => {
       <button class="btn btn-action" onclick="setFloodCount(5000)">5,000</button>
       <button class="btn btn-action" onclick="setFloodCount(10000)">10,000</button>
     </div>
-    <input type="number" class="modal-input" id="flood-input" value="1000" min="1" oninput="updateFloodEstimate()">
+    <input type="number" class="modal-input" id="flood-input" value="1000" min="1" oninput="updateFloodEstimate()" onkeydown="if(event.key==='Enter'){submitFlood();event.preventDefault()}">
     <div class="modal-estimate" id="flood-estimate"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeFloodModal()">Cancel</button>
@@ -937,7 +937,7 @@ app.get("/", (req, res) => {
 </div>
 
 <!-- Help Modal -->
-<div class="modal-overlay" id="help-modal">
+<div class="modal-overlay" id="help-modal" onclick="if(event.target===this)toggleHelp()">
   <div class="glass-elevated modal">
     <h3>Keyboard Shortcuts</h3>
     <table class="help-table">
@@ -1022,6 +1022,8 @@ app.get("/", (req, res) => {
     var idx = state.toasts.findIndex(function(t) { return t.id === id; });
     if (idx === -1) return;
     var toast = state.toasts[idx];
+    if (toast.dismissing) return;
+    toast.dismissing = true;
     toast.el.classList.add('dismissing');
     setTimeout(function() {
       if (toast.el.parentNode) toast.el.parentNode.removeChild(toast.el);
@@ -1197,7 +1199,10 @@ app.get("/", (req, res) => {
   }
 
   // ── Refresh Cycle ──────────────────────────────────────
+  var _refreshing = false;
   async function refresh() {
+    if (_refreshing) return;
+    _refreshing = true;
     try {
       var res = await fetch('/status');
       if (!res.ok) throw new Error('status endpoint returned ' + res.status);
@@ -1268,6 +1273,8 @@ app.get("/", (req, res) => {
     } catch(e) {
       state.redisConnected = false;
       updateConnectionStatus();
+    } finally {
+      _refreshing = false;
     }
   }
 
@@ -1318,6 +1325,7 @@ app.get("/", (req, res) => {
     document.getElementById('flood-input').value = '1000';
     updateFloodEstimate();
     modal.classList.add('open');
+    setTimeout(function() { document.getElementById('flood-input').focus(); document.getElementById('flood-input').select(); }, 50);
   }
 
   function closeFloodModal() {
