@@ -1005,16 +1005,18 @@ app.get("/", (req, res) => {
     el.innerHTML = html;
 
     container.appendChild(el);
-    state.toasts.push({ id: id, el: el });
+    var timerId = setTimeout(function() { dismissToast(id); }, duration);
+    state.toasts.push({ id: id, el: el, dismissing: false, timerId: timerId });
 
-    // Max 4 visible
+    // Max 4 visible — clear timers on evicted toasts
     while (state.toasts.length > 4) {
       var oldest = state.toasts.shift();
-      if (oldest && oldest.el.parentNode) oldest.el.parentNode.removeChild(oldest.el);
+      if (oldest) {
+        clearTimeout(oldest.timerId);
+        if (oldest.el.parentNode) oldest.el.parentNode.removeChild(oldest.el);
+      }
     }
 
-    // Auto-dismiss
-    setTimeout(function() { dismissToast(id); }, duration);
     return id;
   }
 
@@ -1024,6 +1026,7 @@ app.get("/", (req, res) => {
     var toast = state.toasts[idx];
     if (toast.dismissing) return;
     toast.dismissing = true;
+    clearTimeout(toast.timerId);
     toast.el.classList.add('dismissing');
     setTimeout(function() {
       if (toast.el.parentNode) toast.el.parentNode.removeChild(toast.el);
@@ -1143,50 +1146,58 @@ app.get("/", (req, res) => {
     var counts = info.counts;
     var prev = state.previousCounts[queue] || {};
 
-    // Update counts, deltas, sparklines
+    // Update counts, deltas, sparklines — skip writes when unchanged
     var metrics = ['waiting', 'active', 'completed', 'failed', 'delayed'];
     metrics.forEach(function(metric) {
       var prefix = METRIC_PREFIXES[metric];
+      var val = String(counts[metric] || 0);
+      var prevVal = (prev[metric] !== undefined) ? String(prev[metric]) : null;
+
       var numEl = el(prefix + '-' + queue);
+      if (numEl && numEl.textContent !== val) {
+        numEl.textContent = val;
+      }
+      // Color coding
       if (numEl) {
-        numEl.textContent = counts[metric] || 0;
-        // Color coding
         if (metric === 'failed') {
-          numEl.style.color = (counts.failed > 0) ? 'var(--accent-red)' : 'var(--text-primary)';
+          var fc = (counts.failed > 0) ? 'var(--accent-red)' : 'var(--text-primary)';
+          if (numEl.style.color !== fc) numEl.style.color = fc;
         } else if (metric === 'delayed') {
-          numEl.style.color = (counts.delayed > 10) ? 'var(--accent-amber)' : 'var(--text-primary)';
+          var dc = (counts.delayed > 10) ? 'var(--accent-amber)' : 'var(--text-primary)';
+          if (numEl.style.color !== dc) numEl.style.color = dc;
         }
       }
-      // Delta
+      // Delta — only rewrite if the values actually changed
       var deltaEl = el(prefix + 'd-' + queue);
       if (deltaEl) {
-        deltaEl.innerHTML = formatDelta(counts[metric] || 0, prev[metric]);
+        var deltaHtml = formatDelta(counts[metric] || 0, prev[metric]);
+        if (deltaEl.innerHTML !== deltaHtml) deltaEl.innerHTML = deltaHtml;
       }
-      // Sparkline
+      // Sparkline — only rewrite if the latest value changed
       var sparkEl = el(prefix + 's-' + queue);
       if (sparkEl && state.history[queue]) {
-        sparkEl.innerHTML = sparklineSVG(state.history[queue][metric], SPARKLINE_COLORS[metric]);
+        var newSvg = sparklineSVG(state.history[queue][metric], SPARKLINE_COLORS[metric]);
+        if (sparkEl.innerHTML !== newSvg) sparkEl.innerHTML = newSvg;
       }
     });
 
-    // Update badge
+    // Update badge — skip write if already correct
     var badge = el('badge-' + queue);
     if (badge) {
       var baselineRate = info.baseline?.failureRate || 0;
       var elevated = info.chaos.failureRate > baselineRate + 0.01 || info.chaos.slowdownFactor > 1;
+      var newText, newClass;
       if (elevated && info.producer?.running) {
-        badge.textContent = 'DEGRADED';
-        badge.className = 'card-badge badge-chaos';
+        newText = 'DEGRADED'; newClass = 'card-badge badge-chaos';
       } else if (elevated) {
-        badge.textContent = 'FAULTS ON';
-        badge.className = 'card-badge badge-chaos';
+        newText = 'FAULTS ON'; newClass = 'card-badge badge-chaos';
       } else if (info.producer?.running) {
-        badge.textContent = 'PRODUCING';
-        badge.className = 'card-badge badge-running';
+        newText = 'PRODUCING'; newClass = 'card-badge badge-running';
       } else {
-        badge.textContent = 'IDLE';
-        badge.className = 'card-badge badge-idle';
+        newText = 'IDLE'; newClass = 'card-badge badge-idle';
       }
+      if (badge.textContent !== newText) badge.textContent = newText;
+      if (badge.className !== newClass) badge.className = newClass;
     }
 
     // Idle state (card dimming)
