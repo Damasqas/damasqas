@@ -6,6 +6,17 @@ import {
   startProducer, stopProducer, setProducerRate, startAllProducers,
   stopAllProducers, getProducerStates, addSingleJob, getQueue,
 } from "./producer";
+import {
+  runFlowScenario,
+  runOverdueScenario,
+  runMemoryPressureScenario,
+  runDrainImbalanceScenario,
+  runEventDiversityScenario,
+  runJobTypeDiversityScenario,
+  runAlertRulesScenario,
+  runAllScenarios,
+  getScenarioStatus,
+} from "./scenarios";
 
 const redis = new Redis(process.env.REDIS_URL!);
 const app = express();
@@ -166,6 +177,19 @@ app.get("/", (req, res) => {
   <button class="btn btn-preset" onclick="api('/preset/flood', 'POST')">Backlog Flood</button>
   <button class="btn btn-preset" onclick="api('/preset/slowdown', 'POST')">System Slowdown (2m)</button>
   <button class="btn btn-preset" onclick="api('/preset/mixed', 'POST')">Mixed Errors (2m)</button>
+</div>
+
+<div class="presets" style="border-top: 1px solid #2a2a2a;">
+  <span class="label" style="color: #60a5fa;">Feature Tests</span>
+  <button class="btn btn-action" onclick="api('/scenario/flows', 'POST')">Flow + Deadlock</button>
+  <button class="btn btn-action" onclick="api('/scenario/overdue', 'POST')">Overdue Delayed</button>
+  <button class="btn btn-action" onclick="api('/scenario/memory', 'POST')">Memory Pressure</button>
+  <button class="btn btn-action" onclick="api('/scenario/drain', 'POST')">Drain Imbalance</button>
+  <button class="btn btn-action" onclick="api('/scenario/events', 'POST')">Event Diversity</button>
+  <button class="btn btn-action" onclick="api('/scenario/job-types', 'POST')">Job Type Mix</button>
+  <button class="btn btn-action" onclick="api('/scenario/alerts', 'POST')">Alert Rules</button>
+  <div class="separator"></div>
+  <button class="btn btn-global" onclick="if(confirm('Run all 7 feature test scenarios?')) api('/scenario/all', 'POST')">Run All Scenarios</button>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -436,6 +460,84 @@ app.post("/preset/:name", async (req, res) => {
     default:
       res.status(404).json({ error: "Unknown preset" });
   }
+});
+
+// ─── Feature Test Scenarios ─────────────────────────────
+
+app.post("/scenario/flows", async (_req, res) => {
+  try {
+    const result = await runFlowScenario();
+    res.json({ scenario: "flows", result });
+  } catch (err) {
+    res.status(500).json({ scenario: "flows", error: String(err) });
+  }
+});
+
+app.post("/scenario/overdue", async (_req, res) => {
+  try {
+    const result = await runOverdueScenario();
+    res.json({ scenario: "overdue", result });
+  } catch (err) {
+    res.status(500).json({ scenario: "overdue", error: String(err) });
+  }
+});
+
+app.post("/scenario/memory", async (_req, res) => {
+  try {
+    const result = await runMemoryPressureScenario();
+    res.json({ scenario: "memory", result });
+  } catch (err) {
+    res.status(500).json({ scenario: "memory", error: String(err) });
+  }
+});
+
+app.post("/scenario/drain", async (_req, res) => {
+  try {
+    const result = await runDrainImbalanceScenario();
+    res.json({ scenario: "drain", result });
+  } catch (err) {
+    res.status(500).json({ scenario: "drain", error: String(err) });
+  }
+});
+
+app.post("/scenario/events", async (_req, res) => {
+  try {
+    const result = await runEventDiversityScenario();
+    res.json({ scenario: "events", result });
+  } catch (err) {
+    res.status(500).json({ scenario: "events", error: String(err) });
+  }
+});
+
+app.post("/scenario/job-types", async (_req, res) => {
+  try {
+    const result = await runJobTypeDiversityScenario();
+    res.json({ scenario: "job-types", result });
+  } catch (err) {
+    res.status(500).json({ scenario: "job-types", error: String(err) });
+  }
+});
+
+app.post("/scenario/alerts", async (_req, res) => {
+  try {
+    const result = await runAlertRulesScenario();
+    res.json({ scenario: "alerts", result });
+  } catch (err) {
+    res.status(500).json({ scenario: "alerts", error: String(err) });
+  }
+});
+
+app.post("/scenario/all", async (_req, res) => {
+  try {
+    const result = await runAllScenarios();
+    res.json({ scenario: "all", result });
+  } catch (err) {
+    res.status(500).json({ scenario: "all", error: String(err) });
+  }
+});
+
+app.get("/scenario/status", (_req, res) => {
+  res.json(getScenarioStatus());
 });
 
 // ─── Status ─────────────────────────────────────────────

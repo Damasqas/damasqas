@@ -5,7 +5,7 @@ services:
     image: redis:7.2-alpine
     ports:
       - "6379:6379"
-    command: redis-server --maxmemory 512mb --maxmemory-policy noeviction
+    command: redis-server --maxmemory 512mb --maxmemory-policy noeviction --slowlog-log-slower-than 10000 --slowlog-max-len 256
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -17,6 +17,27 @@ services:
       - "4000:4000"       # Control panel
     environment:
       REDIS_URL: redis://redis:6379
+      DAMASQAS_URL: http://damasqas:3888
     depends_on:
       redis:
         condition: service_healthy
+
+  damasqas:
+    build: ..
+    ports:
+      - "3888:3888"       # Dashboard + API
+    command: node dist/index.js --redis redis://redis:6379 --poll-interval 1 --verbose
+    environment:
+      DAMASQAS_DATA_DIR: /data
+    volumes:
+      - damasqas-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3888/api/health"]
+      interval: 5s
+      timeout: 3s
+
+volumes:
+  damasqas-data:
