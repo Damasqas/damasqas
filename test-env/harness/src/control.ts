@@ -1067,9 +1067,11 @@ app.get("/", (req, res) => {
       var data = await apiCall('/scenario/all', 'POST', null, null);
       dismissToast(toastId);
       if (data && data.result) {
-        var summary = Object.entries(data.result).map(function(e) {
-          return (e[1].ran ? '\\u2713' : '\\u2717') + ' ' + e[0];
-        }).join(' &nbsp; ');
+        var lines = String(data.result).split('\\n').filter(function(l) { return l.trim(); });
+        var summary = lines.map(function(line) {
+          var hasError = line.toLowerCase().indexOf('error') !== -1;
+          return (hasError ? '\\u2717 ' : '\\u2713 ') + line.trim();
+        }).join('<br>');
         showToast({ type: 'scenario', title: 'All Scenarios Complete', body: summary, details: data, duration: 8000 });
       }
     } catch(e) {
@@ -1085,7 +1087,8 @@ app.get("/", (req, res) => {
     }});
     var failSlider = document.getElementById('fail-' + queue);
     var slowSlider = document.getElementById('slow-' + queue);
-    if (failSlider) { failSlider.value = '0'; document.getElementById('fail-val-' + queue).textContent = '0%'; }
+    var baseline = Math.round((QUEUE_INFO[queue]?.baselineFailureRate || 0) * 100);
+    if (failSlider) { failSlider.value = String(baseline); document.getElementById('fail-val-' + queue).textContent = baseline + '%'; }
     if (slowSlider) { slowSlider.value = '1'; document.getElementById('slow-val-' + queue).textContent = '1x'; }
   }
 
