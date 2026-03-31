@@ -1713,49 +1713,70 @@ export class MetricsStore {
 
   /**
    * Compare snapshot-based metrics (queue depth, throughput, fail rate)
-   * for the current latest snapshot vs the closest snapshot at the same time yesterday and last week.
+   * for the current period vs the same period yesterday and last week.
+   *
+   * Uses a 5-minute averaging window instead of single snapshots because
+   * BullMQ's throughput_1m and fail_rate_1m are instantaneous rates computed
+   * from deltas between ~1s snapshot intervals. A single data point is very
+   * noisy (e.g., 0 completions in one 1s window → throughput=0, then 2
+   * completions in the next → throughput=120/min). Averaging over 5 minutes
+   * gives ~30 downsampled data points (10s resolution after cleanup) and
+   * produces a stable comparison.
    */
   getSnapshotComparison(queue: string): {
     current: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
     yesterday: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
     lastWeek: { waiting: number; throughput: number | null; failRate: number | null; avgProcessMs: number | null } | null;
   } {
+    const WINDOW_MS = 5 * 60 * 1000; // 5-minute averaging window
+
+    // Current: average over the last 5 minutes
+    const now = Date.now();
+    const currentRow = this.db.prepare(`
+      SELECT
+        AVG(waiting) as waiting,
+        AVG(throughput_1m) as throughput_1m,
+        AVG(fail_rate_1m) as fail_rate_1m,
+        AVG(avg_process_ms) as avg_process_ms
+      FROM snapshots
+      WHERE queue = ? AND ts BETWEEN ? AND ?
+    `).get(queue, now - WINDOW_MS, now) as Record<string, unknown> | undefined;
+
+    if (!currentRow || currentRow.waiting == null) {
+      return { current: null, yesterday: null, lastWeek: null };
+    }
+
+    // Historical: average over a 5-minute window centered on same time yesterday/last week
+    const historicalStmt = this.db.prepare(`
+      SELECT
+        AVG(waiting) as waiting,
+        AVG(throughput_1m) as throughput_1m,
+        AVG(fail_rate_1m) as fail_rate_1m,
+        AVG(avg_process_ms) as avg_process_ms
+      FROM snapshots
+      WHERE queue = ? AND ts BETWEEN ? AND ?
+    `);
+
     const mapRow = (row: Record<string, unknown> | undefined) => {
-      if (!row) return null;
+      if (!row || row.waiting == null) return null;
       return {
-        waiting: row.waiting as number,
+        waiting: Math.round(row.waiting as number),
         throughput: row.throughput_1m as number | null,
         failRate: row.fail_rate_1m as number | null,
         avgProcessMs: row.avg_process_ms as number | null,
       };
     };
 
-    const cols = 'ts, waiting, throughput_1m, fail_rate_1m, avg_process_ms';
-
-    // Get latest snapshot for this queue
-    const currentRow = this.db.prepare(
-      `SELECT ${cols} FROM snapshots WHERE queue = ? ORDER BY ts DESC LIMIT 1`,
-    ).get(queue) as Record<string, unknown> | undefined;
-
-    if (!currentRow) return { current: null, yesterday: null, lastWeek: null };
-
-    const currentTs = currentRow.ts as number;
-
-    // Find closest snapshot at same time yesterday (within 30s window)
-    const historicalStmt = this.db.prepare(`
-      SELECT ${cols} FROM snapshots
-      WHERE queue = ? AND ts BETWEEN ? AND ?
-      ORDER BY ABS(ts - ?) ASC
-      LIMIT 1
-    `);
+    const halfWindow = WINDOW_MS / 2;
+    const yesterdayCenter = now - 86400000;
+    const lastWeekCenter = now - 7 * 86400000;
 
     const yesterdayRow = historicalStmt.get(
-      queue, currentTs - 86400000 - 30000, currentTs - 86400000 + 30000, currentTs - 86400000,
+      queue, yesterdayCenter - halfWindow, yesterdayCenter + halfWindow,
     ) as Record<string, unknown> | undefined;
 
-    // Find closest snapshot at same time last week (within 30s window)
     const lastWeekRow = historicalStmt.get(
-      queue, currentTs - 7 * 86400000 - 30000, currentTs - 7 * 86400000 + 30000, currentTs - 7 * 86400000,
+      queue, lastWeekCenter - halfWindow, lastWeekCenter + halfWindow,
     ) as Record<string, unknown> | undefined;
 
     return {
@@ -1767,7 +1788,8 @@ export class MetricsStore {
 
   /**
    * Get comparison data for all queues at once (for Overview page).
-   * Returns snapshot-based comparison per queue.
+   * Returns snapshot-based comparison per queue, averaged over 5-minute
+   * windows to smooth out noisy instantaneous rates.
    */
   getAllQueuesComparison(): Map<string, {
     current: { waiting: number; throughput: number | null; failRate: number | null };
@@ -1778,38 +1800,54 @@ export class MetricsStore {
       yesterday: { waiting: number; throughput: number | null; failRate: number | null } | null;
     }>();
 
-    // Get latest snapshot per queue (select only needed columns)
-    const latestRows = this.db.prepare(`
-      SELECT s.queue, s.ts, s.waiting, s.throughput_1m, s.fail_rate_1m
-      FROM snapshots s
-      INNER JOIN (SELECT queue, MAX(ts) as max_ts FROM snapshots GROUP BY queue) latest
-        ON s.queue = latest.queue AND s.ts = latest.max_ts
-    `).all() as Record<string, unknown>[];
+    const WINDOW_MS = 5 * 60 * 1000;
+    const now = Date.now();
 
-    // Prepare once outside the loop to avoid recompiling SQL per queue
-    const yesterdayStmt = this.db.prepare(`
-      SELECT waiting, throughput_1m, fail_rate_1m FROM snapshots
-      WHERE queue = ? AND ts BETWEEN ? AND ?
-      ORDER BY ABS(ts - ?) ASC
-      LIMIT 1
-    `);
+    // Current: average over the last 5 minutes, grouped by queue
+    const currentRows = this.db.prepare(`
+      SELECT
+        queue,
+        AVG(waiting) as waiting,
+        AVG(throughput_1m) as throughput_1m,
+        AVG(fail_rate_1m) as fail_rate_1m
+      FROM snapshots
+      WHERE ts BETWEEN ? AND ?
+      GROUP BY queue
+    `).all(now - WINDOW_MS, now) as Record<string, unknown>[];
 
-    for (const row of latestRows) {
+    if (currentRows.length === 0) return result;
+
+    // Yesterday: average over a 5-minute window centered on same time yesterday
+    const halfWindow = WINDOW_MS / 2;
+    const yesterdayCenter = now - 86400000;
+    const yesterdayRows = this.db.prepare(`
+      SELECT
+        queue,
+        AVG(waiting) as waiting,
+        AVG(throughput_1m) as throughput_1m,
+        AVG(fail_rate_1m) as fail_rate_1m
+      FROM snapshots
+      WHERE ts BETWEEN ? AND ?
+      GROUP BY queue
+    `).all(yesterdayCenter - halfWindow, yesterdayCenter + halfWindow) as Record<string, unknown>[];
+
+    const yesterdayMap = new Map<string, Record<string, unknown>>();
+    for (const row of yesterdayRows) {
+      yesterdayMap.set(row.queue as string, row);
+    }
+
+    for (const row of currentRows) {
       const queue = row.queue as string;
-      const currentTs = row.ts as number;
-
-      const yesterdayRow = yesterdayStmt.get(
-        queue, currentTs - 86400000 - 30000, currentTs - 86400000 + 30000, currentTs - 86400000,
-      ) as Record<string, unknown> | undefined;
+      const yesterdayRow = yesterdayMap.get(queue);
 
       result.set(queue, {
         current: {
-          waiting: row.waiting as number,
+          waiting: Math.round(row.waiting as number),
           throughput: row.throughput_1m as number | null,
           failRate: row.fail_rate_1m as number | null,
         },
         yesterday: yesterdayRow ? {
-          waiting: yesterdayRow.waiting as number,
+          waiting: Math.round(yesterdayRow.waiting as number),
           throughput: yesterdayRow.throughput_1m as number | null,
           failRate: yesterdayRow.fail_rate_1m as number | null,
         } : null,
