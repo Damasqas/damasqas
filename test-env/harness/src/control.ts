@@ -43,7 +43,7 @@ app.get("/", (req, res) => {
       --glass-blur-elevated: blur(24px) saturate(130%);
       --text-primary: rgba(255, 255, 255, 0.9);
       --text-secondary: rgba(255, 255, 255, 0.5);
-      --text-muted: rgba(255, 255, 255, 0.3);
+      --text-muted: rgba(255, 255, 255, 0.35);
       --accent-green: #4ade80;
       --accent-red: #f87171;
       --accent-amber: #fbbf24;
@@ -447,7 +447,7 @@ app.get("/", (req, res) => {
       font-size: 12px;
       cursor: pointer;
       font-family: inherit;
-      transition: all 0.15s ease;
+      transition: all 0.1s ease;
       white-space: nowrap;
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
