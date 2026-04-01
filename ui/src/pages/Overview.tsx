@@ -1,10 +1,10 @@
-import { useQueues } from '../hooks/useQueues';
+import { useQueues, useHealth } from '../hooks/useQueues';
 import { useAnomalies } from '../hooks/useAnomalies';
 import { StatCard } from '../components/StatCard';
 import { AlertBanner } from '../components/AlertBanner';
 import { QueueTable } from '../components/QueueTable';
 import { useOverviewComparison, computeTrend } from '../hooks/useComparison';
-import { colors } from '../theme';
+import { colors, glassCard } from '../theme';
 
 interface OverviewProps {
   onSelectQueue: (name: string) => void;
@@ -14,12 +14,17 @@ export function Overview({ onSelectQueue }: OverviewProps) {
   const { data, isLoading } = useQueues();
   const { data: anomalyData } = useAnomalies();
   const { data: comparisonData } = useOverviewComparison();
+  const { data: health } = useHealth();
 
   if (isLoading) {
     return <div style={{ color: colors.textMuted, padding: 40 }}>Loading queues...</div>;
   }
 
   const queues = data?.queues || [];
+
+  if (queues.length === 0 && health?.warming) {
+    return <WarmupIndicator uptime={health.uptime} />;
+  }
   const activeAnomalies = anomalyData?.active || [];
 
   const totalThroughput = queues.reduce(
@@ -101,6 +106,44 @@ export function Overview({ onSelectQueue }: OverviewProps) {
       </div>
 
       <QueueTable queues={queues} onSelect={onSelectQueue} />
+    </div>
+  );
+}
+
+function WarmupIndicator({ uptime }: { uptime: number }) {
+  return (
+    <div style={{
+      ...glassCard,
+      padding: 48,
+      textAlign: 'center',
+      maxWidth: 480,
+      margin: '80px auto 0',
+    }}>
+      <div style={{
+        width: 32,
+        height: 32,
+        border: '2px solid rgba(255,255,255,0.08)',
+        borderTopColor: 'rgba(255,255,255,0.4)',
+        borderRadius: '50%',
+        animation: 'spin 1s linear infinite',
+        margin: '0 auto 20px',
+      }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <div style={{ color: '#fff', fontSize: 15, fontWeight: 600, marginBottom: 8 }}>
+        Discovering queues...
+      </div>
+      <div style={{ color: colors.textMuted, fontSize: 13, lineHeight: 1.6 }}>
+        Scanning Redis for BullMQ queues. This typically takes a few seconds
+        after workers register.
+      </div>
+      <div style={{
+        marginTop: 16,
+        fontSize: 12,
+        color: colors.textMuted,
+        fontFamily: "'IBM Plex Mono', monospace",
+      }}>
+        uptime: {uptime}s
+      </div>
     </div>
   );
 }

@@ -95,6 +95,17 @@ export function RedisHealth() {
   }
 
   const snapshot = health?.snapshot;
+
+  if (!snapshot) {
+    return (
+      <div style={{ color: colors.textMuted, padding: 40, textAlign: 'center' }}>
+        <div style={{ marginBottom: 8, color: colors.textSecondary }}>Collecting Redis health data...</div>
+        <div style={{ fontSize: 12 }}>
+          Health snapshots begin after the first collector analysis cycle (~10s).
+        </div>
+      </div>
+    );
+  }
   const oom = health?.oomProjection;
   const warning = health?.maxmemoryPolicyWarning;
   const growth = health?.topGrowthContributors || [];

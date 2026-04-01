@@ -39,6 +39,21 @@ export interface QueueState {
   } | null;
 }
 
+export interface HealthStatus {
+  status: string;
+  queues: number;
+  uptime: number;
+  warming: boolean;
+}
+
+export function useHealth() {
+  return useQuery<HealthStatus>({
+    queryKey: ['health'],
+    queryFn: () => fetch('/api/health').then((r) => r.json()),
+    refetchInterval: 3000,
+  });
+}
+
 export function useQueues() {
   return useQuery<{ queues: QueueState[] }>({
     queryKey: ['queues'],
