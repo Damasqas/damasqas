@@ -103,11 +103,12 @@ export class FlowInspector {
 
         if (parentIds.length === 0) continue;
 
-        // Batch: get parent hashes and pending dependencies
+        // Batch: get parent hashes and pending dependencies + failed children
         const p1 = this.cmd.pipeline();
         for (const parentId of parentIds) {
           p1.hmget(`${this.prefix}:${queue}:${parentId}`, 'name', 'timestamp');
           p1.smembers(`${this.prefix}:${queue}:${parentId}:dependencies`);
+          p1.hkeys(`${this.prefix}:${queue}:${parentId}:failed`);
         }
         const r1 = await p1.exec();
         if (!r1) continue;
@@ -122,11 +123,14 @@ export class FlowInspector {
         const parents: ParentInfo[] = [];
 
         for (let i = 0; i < parentIds.length; i++) {
-          const offset = i * 2;
+          const offset = i * 3;
           const [, fields] = r1[offset]!;
           const [, deps] = r1[offset + 1]!;
+          const [, failedChildKeys] = r1[offset + 2]!;
           const [name, timestamp] = (fields as (string | null)[]) || [];
-          const childKeys = (deps as string[]) || [];
+          const pendingKeys = (deps as string[]) || [];
+          const failedKeys = (failedChildKeys as string[]) || [];
+          const childKeys = [...new Set([...pendingKeys, ...failedKeys])];
 
           if (childKeys.length > 0) {
             parents.push({
