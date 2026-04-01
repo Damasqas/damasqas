@@ -174,15 +174,18 @@ export function RedisHealth() {
           label="Fragmentation"
           value={snapshot?.memFragmentationRatio?.toFixed(2) ?? '--'}
           sub={snapshot?.memFragmentationRatio
-            ? snapshot.memFragmentationRatio > 1.5
-              ? 'high fragmentation'
-              : snapshot.memFragmentationRatio < 1.0
-                ? 'using swap'
-                : 'healthy'
+            ? snapshot.memFragmentationRatio < 1.0
+              ? 'using swap'
+              : snapshot.usedMemory < 10 * 1024 * 1024
+                ? 'normal at low memory'
+                : snapshot.memFragmentationRatio > 1.5
+                  ? 'high fragmentation'
+                  : 'healthy'
             : undefined}
-          critical={snapshot?.memFragmentationRatio != null && (
-            snapshot.memFragmentationRatio > 1.5 || snapshot.memFragmentationRatio < 1.0
-          )}
+          critical={snapshot?.memFragmentationRatio != null &&
+            snapshot.usedMemory >= 10 * 1024 * 1024 && (
+              snapshot.memFragmentationRatio > 1.5 || snapshot.memFragmentationRatio < 1.0
+            )}
         />
         <StatCard
           label="Clients"
