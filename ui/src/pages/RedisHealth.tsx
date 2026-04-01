@@ -95,6 +95,17 @@ export function RedisHealth() {
   }
 
   const snapshot = health?.snapshot;
+
+  if (!snapshot) {
+    return (
+      <div style={{ color: colors.textMuted, padding: 40, textAlign: 'center' }}>
+        <div style={{ marginBottom: 8, color: colors.textSecondary }}>Collecting Redis health data...</div>
+        <div style={{ fontSize: 12 }}>
+          Health snapshots begin after the first collector analysis cycle (~10s).
+        </div>
+      </div>
+    );
+  }
   const oom = health?.oomProjection;
   const warning = health?.maxmemoryPolicyWarning;
   const growth = health?.topGrowthContributors || [];
@@ -163,15 +174,18 @@ export function RedisHealth() {
           label="Fragmentation"
           value={snapshot?.memFragmentationRatio?.toFixed(2) ?? '--'}
           sub={snapshot?.memFragmentationRatio
-            ? snapshot.memFragmentationRatio > 1.5
-              ? 'high fragmentation'
-              : snapshot.memFragmentationRatio < 1.0
-                ? 'using swap'
-                : 'healthy'
+            ? snapshot.memFragmentationRatio < 1.0
+              ? 'using swap'
+              : snapshot.usedMemory < 10 * 1024 * 1024
+                ? 'normal at low memory'
+                : snapshot.memFragmentationRatio > 1.5
+                  ? 'high fragmentation'
+                  : 'healthy'
             : undefined}
-          critical={snapshot?.memFragmentationRatio != null && (
-            snapshot.memFragmentationRatio > 1.5 || snapshot.memFragmentationRatio < 1.0
-          )}
+          critical={snapshot?.memFragmentationRatio != null &&
+            snapshot.usedMemory >= 10 * 1024 * 1024 && (
+              snapshot.memFragmentationRatio > 1.5 || snapshot.memFragmentationRatio < 1.0
+            )}
         />
         <StatCard
           label="Clients"

@@ -102,7 +102,14 @@ export class Collector {
 
     try {
       // 1. Queue discovery refresh (every Mth tick, default ~60s)
-      if (this.tickCount % this.discoveryEveryNTicks === 0) {
+      //    When no queues have been found yet, retry much more aggressively
+      //    (every 5s) so the dashboard doesn't sit empty for 60s on startup.
+      const noQueuesYet = this.discovery.getQueues().length === 0;
+      const discoveryDue = noQueuesYet
+        ? this.tickCount % 5 === 0
+        : this.tickCount % this.discoveryEveryNTicks === 0;
+
+      if (discoveryDue) {
         await this.discovery.scan();
         // Check for BullMQ built-in metrics on discovered queues
         try {
