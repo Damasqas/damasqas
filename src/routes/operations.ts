@@ -80,7 +80,8 @@ export function operationRoutes(ops: Operations, adapter: QueueAdapter): Router 
 
   router.get('/queues/:name/errors', async (req, res) => {
     try {
-      const since = Date.now() - 5 * 60 * 1000;
+      const rangeMs = parseRangeMs(req.query.range as string | undefined, 60 * 60 * 1000);
+      const since = Date.now() - rangeMs;
       const groups = await adapter.getErrorGroups(req.params.name!, since, 500);
       res.json({ groups });
     } catch (err) {
@@ -89,4 +90,17 @@ export function operationRoutes(ops: Operations, adapter: QueueAdapter): Router 
   });
 
   return router;
+}
+
+const RANGE_MAP: Record<string, number> = {
+  '5m': 5 * 60 * 1000,
+  '1h': 60 * 60 * 1000,
+  '6h': 6 * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+};
+
+function parseRangeMs(range: string | undefined, defaultMs: number): number {
+  if (!range) return defaultMs;
+  return RANGE_MAP[range] ?? defaultMs;
 }

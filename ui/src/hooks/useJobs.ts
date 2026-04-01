@@ -38,11 +38,11 @@ export function useJobs(
   });
 }
 
-export function useErrorGroups(queue: string) {
+export function useErrorGroups(queue: string, range: string = '1h') {
   return useQuery<{ groups: ErrorGroup[] }>({
-    queryKey: ['errors', queue],
+    queryKey: ['errors', queue, range],
     queryFn: () =>
-      fetch(`/api/queues/${encodeURIComponent(queue)}/errors`).then((r) => r.json()),
+      fetch(`/api/queues/${encodeURIComponent(queue)}/errors?range=${range}`).then((r) => r.json()),
     refetchInterval: 10000,
   });
 }
