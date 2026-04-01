@@ -315,8 +315,8 @@ Damasqas is configured via CLI flags, environment variables, or a config file. P
 | `--poll-interval <seconds>` | `1` | Snapshot collection interval |
 | `--discovery-interval <seconds>` | `60` | Queue discovery scan interval |
 | `--retention-days <number>` | `30` | How long to keep historical data in SQLite |
-| `--slack-webhook <url>` | — | Slack incoming webhook URL for anomaly alerts |
-| `--discord-webhook <url>` | — | Discord webhook URL for anomaly alerts |
+| `--slack-webhook (in beta) <url>` | — | Slack incoming webhook URL for anomaly alerts |
+| `--discord-webhook (in beta) <url>` | — | Discord webhook URL for anomaly alerts |
 | `--cooldown <seconds>` | `300` | Minimum seconds between repeat anomaly alerts |
 | `--failure-threshold <n>` | `3` | Alert when failures exceed Nx baseline |
 | `--backlog-threshold <n>` | `5` | Alert when backlog exceeds Nx baseline |
@@ -335,8 +335,8 @@ Damasqas is configured via CLI flags, environment variables, or a config file. P
 | `DAMASQAS_POLL_INTERVAL` | `--poll-interval` |
 | `DAMASQAS_DISCOVERY_INTERVAL` | `--discovery-interval` |
 | `DAMASQAS_RETENTION_DAYS` | `--retention-days` |
-| `SLACK_WEBHOOK` | `--slack-webhook` |
-| `DISCORD_WEBHOOK` | `--discord-webhook` |
+| `SLACK_WEBHOOK (in beta)` | `--slack-webhook` |
+| `DISCORD_WEBHOOK (in beta)` | `--discord-webhook` |
 | `DAMASQAS_COOLDOWN` | `--cooldown` |
 | `DAMASQAS_FAILURE_THRESHOLD` | `--failure-threshold` |
 | `DAMASQAS_BACKLOG_THRESHOLD` | `--backlog-threshold` |
@@ -501,7 +501,7 @@ All endpoints are served under `/api/` at the configured port (default 3888).
 | `GET` | `/api/queues/:name/job-types?range=1h` | Per-job-type breakdown (completed, failed, fail rate, avg wait, avg process, P95) |
 | `GET` | `/api/queues/:name/jobs?status=failed&limit=20&offset=0` | List jobs by status: `waiting`, `active`, `completed`, `failed`, `delayed` |
 | `GET` | `/api/queues/:name/jobs/:id` | Single job detail (data, opts, timestamps, stacktrace, return value) |
-| `GET` | `/api/queues/:name/errors` | Error groups for the last 5 minutes with counts and sample job IDs |
+| `GET` | `/api/queues/:name/errors` | Error groups with counts and sample job IDs (default: last 1 hour, configurable via `range` query param: `5m`, `1h`, `6h`, `24h`, `7d`) |
 | `GET` | `/api/queues/:name/events?since=&until=&type=&job_name=&limit=&offset=` | Paginated events for a specific queue |
 
 ### Operations
