@@ -1,8 +1,6 @@
 # damasqas
 
-Standalone observability for [BullMQ](https://docs.bullmq.io/) queues. One command, zero code changes.
-
-Damasqas connects directly to your Redis instance, automatically discovers every BullMQ queue, and gives you a real-time dashboard with anomaly detection, capacity planning, flow visualization, and alerting — all backed by a local SQLite database with no external dependencies.
+Open-source BullMQ monitoring and observability dashboard. One command, zero code changes.
 
 ```
 npx damasqas --redis redis://localhost:6379
@@ -10,57 +8,116 @@ npx damasqas --redis redis://localhost:6379
 
 Then open [http://localhost:3888](http://localhost:3888).
 
----
+<img width="1728" height="973" alt="Damasqas Overview — real-time queue monitoring with throughput, failure rates, and trend indicators" src="https://github.com/user-attachments/assets/6c480839-5fa1-4cb3-a493-38a3ca4b508b" />
 
-## Table of Contents
+Damasqas connects directly to your Redis instance, automatically discovers every BullMQ queue, and gives you a real-time dashboard with historical analytics, anomaly detection, capacity planning, flow visualization, and alerting — all backed by a local SQLite database with zero external dependencies.
 
-- [Why Damasqas?](#why-damasqas)
-- [Features](#features)
-  - [Real-Time Dashboard](#real-time-dashboard)
-  - [Automatic Queue Discovery](#automatic-queue-discovery)
-  - [Historical Data Backfill](#historical-data-backfill)
-  - [Anomaly Detection](#anomaly-detection)
-  - [Error Clustering](#error-clustering)
-  - [Rule-Based Alerting](#rule-based-alerting)
-  - [Drain Rate Analysis & Capacity Planning](#drain-rate-analysis--capacity-planning)
-  - [Event Timeline & Full-Text Search](#event-timeline--full-text-search)
-  - [Job Type Breakdown](#job-type-breakdown)
-  - [Flow Visualization & Deadlock Detection](#flow-visualization--deadlock-detection)
-  - [Redis Health Monitoring](#redis-health-monitoring)
-  - [Comparative Analytics](#comparative-analytics)
-  - [Clock Skew Compensation](#clock-skew-compensation)
-  - [Operations](#operations)
-  - [Headless Mode](#headless-mode)
-  - [Graceful Shutdown](#graceful-shutdown)
-- [Quick Start](#quick-start)
-- [Configuration](#configuration)
-  - [CLI Flags](#cli-flags)
-  - [Environment Variables](#environment-variables)
-  - [Config File](#config-file)
-- [Architecture](#architecture)
-  - [Redis Connections](#redis-connections)
-  - [Startup Sequence](#startup-sequence)
-  - [SQLite Storage](#sqlite-storage)
-  - [API Server](#api-server)
-  - [Collection Cadences](#collection-cadences)
-  - [Data Retention](#data-retention)
-  - [BullMQ Compatibility](#bullmq-compatibility)
-- [API Reference](#api-reference)
-- [Local Development](#local-development)
-- [License](#license)
+<img width="1728" height="879" alt="Queue detail with capacity planning — drain rate analysis, time-to-clear projection, and inflow vs drain chart" src="https://github.com/user-attachments/assets/5168f171-8e8e-4f7a-a75f-67104f153b3f" />
+
+<img width="1726" height="964" alt="Error clustering — failed jobs automatically grouped by normalized error signature with per-job retry and remove" src="https://github.com/user-attachments/assets/2440c681-f014-4ec7-9b9f-4760bc06e205" />
+
+<img width="1728" height="964" alt="Redis health — memory tracking, OOM projection, slow command log with BullMQ tagging, and per-queue key size attribution" src="https://github.com/user-attachments/assets/5aa7312f-1dd6-4235-9373-a05295ca73b7" />
 
 ---
 
 ## Why Damasqas?
 
-Most BullMQ monitoring tools require you to instrument your worker code or only show you a snapshot of current queue state. Damasqas takes a different approach:
+Most BullMQ dashboards (bull-board, QueueDash, Arena) require you to instrument your worker code and only show a snapshot of current queue state. Damasqas is different:
 
 - **Zero code changes.** Point it at Redis and it works. No SDK, no middleware, no worker modifications. Reads Redis data structures directly via `ioredis`.
-- **Historical analytics.** SQLite (WAL mode) stores up to 30 days of metrics so you can spot trends, not just react to fires. Automatic downsampling keeps storage bounded.
-- **Anomaly detection.** Seven anomaly types detected automatically against rolling baselines — failure spikes, backlog growth, stalled jobs, processing slowdowns, idle queues, old waiting jobs, and overdue delayed jobs. Anomalies auto-resolve when conditions clear.
-- **Capacity planning.** Real-time drain rate analysis with smoothed rates tells you whether your workers are keeping up, how long until the queue clears, and how much more capacity you need.
-- **Flow awareness.** Visualize parent-child job dependencies and detect deadlocked flows where a parent is permanently stuck waiting on a failed child with no retries left.
-- **BullMQ v5 native.** Full support for prioritized jobs, waiting-children state, flow dependencies, packed delayed scores, and built-in worker metrics when available.
+- **Historical analytics.** SQLite (WAL mode) stores up to 30 days of metrics so you can spot trends, not just react to fires.
+- **Anomaly detection.** Seven anomaly types detected automatically against rolling baselines — failure spikes, backlog growth, stalled jobs, processing slowdowns, and more. Auto-resolves when conditions clear.
+- **Capacity planning.** Real-time drain rate analysis tells you whether your workers are keeping up, how long until the queue clears, and how much more capacity you need.
+- **Redis health monitoring.** Memory tracking, OOM projection, slowlog capture, per-queue key size attribution, and actionable remediation recommendations.
+- **Flow awareness.** Visualize parent-child job dependencies and detect deadlocked flows where a parent is permanently stuck.
+- **Error clustering.** Failed jobs automatically grouped by normalized error signature — no more scrolling through identical stack traces.
+
+### How Damasqas Compares
+
+| Feature | bull-board | QueueDash | Taskforce.sh | Damasqas |
+|---------|-----------|-----------|-------------|----------|
+| No code changes required | ✗ | ✗ | ✓ | ✓ |
+| Open source | ✓ | ✓ | ✗ | ✓ |
+| Historical analytics | ✗ | ✗ | ✓ | ✓ (30 days, local SQLite) |
+| Anomaly detection | ✗ | ✗ | ✗ | ✓ (7 anomaly types) |
+| Capacity planning / drain analysis | ✗ | ✗ | ✗ | ✓ |
+| Redis health + OOM projection | ✗ | ✗ | ✗ | ✓ |
+| Error clustering | ✗ | ✗ | ✗ | ✓ |
+| Flow deadlock detection | ✗ | ✗ | ✗ | ✓ |
+| Webhook alerts (Slack, Discord) | ✗ | ✗ | ✓ | ✓ |
+| Self-hosted | N/A (embedded) | N/A (embedded) | ✗ (SaaS) | ✓ |
+| BullMQ v5 support | ✓ | ✓ | ✓ | ✓ |
+
+---
+
+## Quick Start
+
+### npx (no install)
+
+```bash
+npx damasqas --redis redis://localhost:6379
+```
+
+### Global Install
+
+```bash
+npm install -g damasqas
+damasqas --redis redis://localhost:6379
+```
+
+### Docker
+
+```bash
+docker build -t damasqas .
+docker run -p 3888:3888 \
+  -v damasqas-data:/data \
+  -e DAMASQAS_DATA_DIR=/data \
+  damasqas node dist/index.js --redis redis://host.docker.internal:6379
+```
+
+### Docker Compose
+
+```yaml
+services:
+  damasqas:
+    build: .
+    ports:
+      - "3888:3888"
+    command: node dist/index.js --redis redis://redis:6379
+    environment:
+      DAMASQAS_DATA_DIR: /data
+    volumes:
+      - damasqas-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3888/api/health"]
+      interval: 5s
+      timeout: 3s
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+
+volumes:
+  damasqas-data:
+```
+
+### From Source
+
+```bash
+git clone https://github.com/Damasqas/damasqas.git
+cd damasqas
+npm install
+npm run build
+npm run build:ui
+node dist/index.js --redis redis://localhost:6379
+```
 
 ---
 
@@ -241,79 +298,6 @@ Run Damasqas as a pure collector without the web dashboard using `--no-dashboard
 ### Graceful Shutdown
 
 Damasqas handles `SIGINT` and `SIGTERM` signals with a clean shutdown sequence: stops the collector polling loop, stops the event stream consumer (disconnects the blocking `XREAD` connection), flushes and closes the SQLite database, disconnects all three Redis connections, and closes the HTTP server. This ensures no data corruption on deploys, container restarts, or `Ctrl+C`.
-
----
-
-## Quick Start
-
-### npx (no install)
-
-```bash
-npx damasqas --redis redis://localhost:6379
-```
-
-### Global Install
-
-```bash
-npm install -g damasqas
-damasqas --redis redis://localhost:6379
-```
-
-### Docker
-
-The Dockerfile uses a multi-stage build (compile TypeScript + build Vite UI in the build stage, copy only `dist/` and `node_modules/` to the runtime stage) and includes a built-in health check:
-
-```bash
-docker build -t damasqas .
-docker run -p 3888:3888 \
-  -v damasqas-data:/data \
-  -e DAMASQAS_DATA_DIR=/data \
-  damasqas node dist/index.js --redis redis://host.docker.internal:6379
-```
-
-### Docker Compose
-
-```yaml
-services:
-  damasqas:
-    build: .
-    ports:
-      - "3888:3888"
-    command: node dist/index.js --redis redis://redis:6379
-    environment:
-      DAMASQAS_DATA_DIR: /data
-    volumes:
-      - damasqas-data:/data
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3888/api/health"]
-      interval: 5s
-      timeout: 3s
-
-  redis:
-    image: redis:7-alpine
-    command: redis-server --maxmemory 512mb --maxmemory-policy noeviction
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-
-volumes:
-  damasqas-data:
-```
-
-### From Source
-
-```bash
-git clone https://github.com/Damasqas/damasqas.git
-cd damasqas
-npm install
-npm run build
-npm run build:ui
-node dist/index.js --redis redis://localhost:6379
-```
 
 ---
 
